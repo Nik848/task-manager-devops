@@ -1,7 +1,23 @@
 node_modules/
 dist/
 build/
+coverage/
+
+# Environment and sensitive credential files
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+kubeconfig*
+
+# Logs and databases
 *.log
 drizzle/
 /frontend/
+
+# OS and IDE files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

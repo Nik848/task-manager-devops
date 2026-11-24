@@ -1,0 +1,31 @@
+version: "3.8"
+
+services:
+  jenkins:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: custom-jenkins:latest
+    container_name: jenkins-devops
+    restart: unless-stopped
+    ports:
+      # Port 8085 avoids collision with frontend on 8080
+      - "8085:8080"
+      - "50000:50000"
+    environment:
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - JAVA_OPTS=-Djenkins.install.runSetupWizard=true
+    volumes:
+      # Preserve Jenkins home and credentials
+      - jenkins_home:/var/jenkins_home
+      # Mount Docker socket to allow Jenkins to build and push container images
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Mount host kubeconfig directory (read-only)
+      - ~/.kube:/home/jenkins/.kube:ro
+    extra_hosts:
+      # Allow Jenkins container to communicate with Docker Desktop Kubernetes control plane
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  jenkins_home:
+    name: jenkins_home
