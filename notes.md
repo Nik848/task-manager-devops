@@ -416,7 +416,57 @@ terraform destroy -auto-approve
 
 ---
 
-## 9. Hands-On DevOps Operations & Cheat Sheet
+## 9. Monitoring with Prometheus and Grafana (Phase 7)
+
+### Why Prometheus & Grafana?
+Observability is critical in production DevOps environments. Phase 7 implements automated metric scraping, alerting capabilities, and real-time visualization:
+- **Prometheus**: Pulls time-series metrics every 10–15s from application endpoints and Kubernetes cluster infrastructure.
+- **Grafana**: Visualizes metrics across 7 real-time operational panels.
+- **Metrics Server & cAdvisor**: Captures real-time CPU and memory usage across nodes, pods, and containers.
+
+### Architecture & Isolation
+- **Namespace**: Dedicated `monitoring` namespace isolating monitoring infrastructure from application workloads.
+- **Backend Application Metrics**: Prometheus scrapes `backend-service.task-manager.svc.cluster.local:3000/metrics` capturing `http_requests_total`, `http_request_duration_seconds`, and Node.js process metrics (`process_cpu_seconds_total`, `process_resident_memory_bytes`, `nodejs_heap_size_used_bytes`).
+- **Cluster & Container Metrics**: Kubelet cAdvisor scrapes provide `container_cpu_usage_seconds_total` and `container_memory_working_set_bytes`.
+- **Metrics Server**: Configured with `--kubelet-insecure-tls` for Docker Desktop, enabling `kubectl top nodes` and `kubectl top pods`.
+- **Security**: Both Prometheus (`UID 65534`) and Grafana (`UID 472`) run as non-root containers with strict resource requests and limits. No public LoadBalancers are exposed; access is mediated through `kubectl port-forward`.
+
+```text
+monitoring/
+├── README.md                          # Full operations guide
+├── namespace.yaml                     # monitoring namespace
+├── metrics-server.yaml                # Metrics Server for kubectl top
+├── deploy.ps1                         # One-click deployment script
+├── dashboards/
+│   └── dashboard-task-manager.json    # Grafana Dashboard JSON definition
+├── prometheus/
+│   ├── rbac.yaml                      # ServiceAccount & ClusterRole
+│   ├── configmap.yaml                 # Scrape configuration
+│   ├── deployment.yaml                # Prometheus Deployment
+│   └── service.yaml                   # ClusterIP Service (9090)
+└── grafana/
+    ├── secret.yaml                    # Credentials (admin / devops-monitoring-admin)
+    ├── configmap-datasources.yaml     # Auto-provisioned Prometheus datasource
+    ├── configmap-dashboards.yaml      # Dashboard provider
+    ├── configmap-dashboard-json.yaml  # ConfigMap wrapping dashboard JSON
+    ├── deployment.yaml                # Grafana Deployment (3000)
+    └── service.yaml                   # ClusterIP Service
+```
+
+### Accessing Dashboards
+```bash
+# Grafana (Host Port 3001 -> Container Port 3000):
+kubectl port-forward svc/grafana-service 3001:3000 -n monitoring
+# URL: http://localhost:3001 (User: admin / Password: devops-monitoring-admin)
+
+# Prometheus (Host Port 9090 -> Container Port 9090):
+kubectl port-forward svc/prometheus-service 9090:9090 -n monitoring
+# URL: http://localhost:9090
+```
+
+---
+
+## 10. Hands-On DevOps Operations & Cheat Sheet
 
 ### 1. Run with Docker Compose (Local Dev)
 ```powershell
@@ -471,7 +521,7 @@ powershell -ExecutionPolicy Bypass -File .\jenkins\setup-jenkins.ps1
 
 ---
 
-## 10. Summary of What We Achieved
+## 11. Summary of What We Achieved
 
 | Area | What Was Accomplished |
 | :--- | :--- |
@@ -481,5 +531,6 @@ powershell -ExecutionPolicy Bypass -File .\jenkins\setup-jenkins.ps1
 | **CI/CD** | Production 5-stage declarative `Jenkinsfile` with automated build, test, packaging, and SCM push trigger. |
 | **Ansible Automation** | 4 production playbooks for Docker, Kubernetes, Application Deployment, and Config Management running from WSL2. |
 | **Terraform IaC** | Modular Infrastructure as Code (`kreuzwerker/docker` ~> 3.0.2) with reusable container module, outputs, and isolated stack. |
-| **Automation** | One-click PowerShell deployment scripts for Kubernetes (`deploy.ps1`) and Jenkins (`setup-jenkins.ps1`). |
+| **Monitoring (Prometheus & Grafana)** | Complete monitoring stack with auto-provisioned Prometheus, Grafana 7-panel dashboard, Metrics Server, and cAdvisor. |
+| **Automation** | One-click PowerShell deployment scripts for Kubernetes (`deploy.ps1`), Jenkins (`setup-jenkins.ps1`), and Monitoring (`deploy.ps1`). |
 | **Git & Versioning**| Clean, sanitized repository pushed to GitHub on branch **`develop`** without secret leaks. |
