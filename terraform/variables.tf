@@ -94,8 +94,8 @@ variable "database_url" {
 }
 
 variable "jwt_secret" {
-  description = "Secret key used for signing JWT authentication tokens"
+  description = "Secret key used for signing JWT authentication tokens (leave empty or supply explicitly; never hardcoded)"
   type        = string
   sensitive   = true
-  default     = "dev-insecure-jwt-secret-replace-in-production"
+  default     = ""
 }

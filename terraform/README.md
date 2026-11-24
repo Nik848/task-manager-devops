@@ -58,8 +58,8 @@ terraform/
 The `docker_container` module encapsulates container lifecycle management:
 - **Networking**: Automatically joins the dedicated bridge network with custom service aliases.
 - **Port Mapping**: Dynamically creates port bindings when `internal_port` and `external_port` are defined.
-- **Volume Mounts**: Attaches persistent data volumes (e.g., application logs).
-- **Environment Variables**: Injects non-sensitive and sensitive configuration without leaking credentials.
+- **Volume Mounts**: Attaches persistent data volumes (e.g., `taskmanager-tf-logs` as a persistent volume demonstration).
+- **Environment Variables**: Injects non-sensitive and sensitive configuration without leaking credentials in CLI output.
 - **Health Checks**: Configures custom container health probes matching the application requirements.
 
 ---
@@ -76,8 +76,8 @@ The `docker_container` module encapsulates container lifecycle management:
 | `frontend_host_port` | number | `8088` | Host port mapped to frontend (avoids 80/8080 collision). |
 | `backend_image` | string | `taskmanager-backend:latest` | Local image tag for backend service. |
 | `frontend_image` | string | `taskmanager-frontend:latest` | Local image tag for frontend service. |
-| `database_url` | string | `""` | Database connection URL (**marked `sensitive = true`**). |
-| `jwt_secret` | string | `dev-insecure-jwt-secret...` | JWT secret (**marked `sensitive = true`**). |
+| `database_url` | string | `""` | Database connection URL (**marked `sensitive = true`**, no default secret). |
+| `jwt_secret` | string | `""` | JWT signing secret (**marked `sensitive = true`**, no insecure default). |
 
 ### Key Outputs (`outputs.tf`)
 
@@ -88,10 +88,10 @@ The `docker_container` module encapsulates container lifecycle management:
 | `backend_container_name` | Name of running backend container | `taskmanager-tf-backend` |
 | `frontend_container_name`| Name of running frontend container | `taskmanager-tf-frontend` |
 | `network_name` | Created Docker bridge network | `taskmanager-tf-network` |
-| `log_volume_name` | Created persistent log volume | `taskmanager-tf-logs` |
+| `log_volume_name` | Demonstration persistent volume (`backend` streams logs to stdout via Pino) | `taskmanager-tf-logs` |
 
 > [!NOTE]
-> Secrets (`database_url`, `jwt_secret`) are never exported as outputs or logged in plaintext.
+> Secrets (`database_url`, `jwt_secret`) are never exported as outputs or displayed in normal CLI runs.
 
 ---
 
@@ -134,14 +134,23 @@ terraform destroy -auto-approve
 
 ---
 
-## 7. Security & State-File Management
+## 7. Security, State-File Management & Storage Architecture
 
-1. **Zero Secret Leaks**:
-   - Sensitive variables (`database_url`, `jwt_secret`) are marked with `sensitive = true` to suppress their values from Terraform plan and apply output.
-   - `terraform.tfvars.example` provides sanitized placeholders only.
-2. **Git Ignore Protections**:
-   - Both `terraform/.gitignore` and the repository root `.gitignore` exclude `*.tfstate`, `*.tfstate.*`, `*.tfvars`, `*.tfplan`, and `.terraform/`.
-   - Real state files containing sensitive data are never committed to version control.
+### A. Secret Masking vs. Terraform State Storage
+- **CLI Masking (`sensitive = true`)**:
+  Declaring `sensitive = true` instructs Terraform to suppress variable values from `terraform plan` and `terraform apply` console output and logs.
+- **State File Reality (Unencrypted Storage)**:
+  **`sensitive = true` does NOT encrypt secrets inside the Terraform state file (`terraform.tfstate`)!** Terraform maintains a full JSON representation of all managed resource attributes, including container environment variables (`DATABASE_URL`, `JWT_SECRET`), in **cleartext JSON**. Local `.tfstate` files and backup copies (`.tfstate.backup`) hold these values unencrypted.
+- **State Security Controls**:
+  1. **Strict Version Control Exclusion**: Both `terraform/.gitignore` and the repository root `.gitignore` prevent committing `.terraform/`, `*.tfstate`, `*.tfstate.backup`, `*.tfvars`, and `*.tfplan`.
+  2. **Workstation Encryption**: Local state files must reside on full-disk encrypted disks (e.g. BitLocker on Windows 11, LUKS on Linux) with restricted POSIX permissions (`chmod 600`).
+  3. **Enterprise Remote Backend**: If migrated to shared infrastructure or teams, the state must be stored in a secured remote backend (such as AWS S3 with KMS encryption, Azure Blob with customer-managed keys, or Terraform Cloud/Enterprise) with encryption-at-rest, TLS in transit, and least-privilege IAM controls.
+
+### B. Persistent Storage Architecture
+- **Demonstration Volume (`taskmanager-tf-logs`)**:
+  The volume `taskmanager-tf-logs` is mounted to `/app/logs` on the backend container to demonstrate persistent storage orchestration in Terraform.
+- **Application Logging Reality**:
+  The Node.js Express backend uses **Pino** for structured JSON logging. Pino outputs directly to standard output (`stdout`) adhering to Twelve-Factor app principles. Logs are collected directly by Docker's logging driver (`docker logs taskmanager-tf-backend`) rather than written to disk files inside `/app/logs`.
 
 ---
 

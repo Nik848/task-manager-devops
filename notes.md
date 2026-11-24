@@ -355,12 +355,15 @@ ansible-playbook -i inventory/hosts.ini --check playbooks/configure_application.
 ### Why Terraform?
 Terraform provides **declarative, reproducible Infrastructure as Code (IaC)**. While Ansible focuses on procedural tasks and configuration management, Terraform manages the complete lifecycle of cloud and container resources via declared state files (`.tfstate`), dependency graphs, and reusable modules.
 
-### Terraform Architecture in Local Docker Desktop
-To avoid any collision with existing environments:
-- **Docker Compose** runs the developer stack on ports `3000` & `8080`.
-- **Kubernetes** orchestrates the production application on port `80`.
-- **Terraform** provisions an alternative, isolated container stack on host ports `3001` (backend) and `8088` (frontend) via a custom bridge network (`taskmanager-tf-network`) and persistent log volume (`taskmanager-tf-logs`).
+### Provider & Architecture in Local Docker Desktop
+- **Provider**: `kreuzwerker/docker` pinned to version `~> 3.0.2` (Terraform `>= 1.5.0`).
+- **Isolation Strategy**:
+  - **Docker Compose** runs the development stack on ports `3000` & `8080`.
+  - **Kubernetes** orchestrates the production application on port `80` (`LoadBalancer`).
+  - **Terraform** provisions an alternative, isolated container stack on host ports `3001` (backend) and `8088` (frontend) via a custom bridge network (`taskmanager-tf-network`) and persistent log volume (`taskmanager-tf-logs`).
+- **Demonstration Storage**: The `taskmanager-tf-logs` volume is mounted at `/app/logs` as a persistent volume demonstration. The Node.js Express backend logs directly to standard output via **Pino**, adhering to Twelve-Factor app principles.
 
+### Directory Structure & Reusable Module
 ```text
 terraform/
 ├── .gitignore                      # Protects .terraform/, *.tfstate, and *.tfvars
@@ -375,6 +378,18 @@ terraform/
         ├── variables.tf            # Module input parameters
         └── outputs.tf              # Container ID, name, published ports
 ```
+
+### State-File Security Limitations
+- `sensitive = true` masks values in CLI output (`terraform plan`/`apply`), preventing visual exposure in terminal logs.
+- **It does NOT encrypt secrets in Terraform state (`.tfstate`)!** Attributes like `DATABASE_URL` and `JWT_SECRET` are stored as cleartext JSON inside `.tfstate`.
+- Local state files are strictly excluded from Git via `.gitignore`, should reside on full-disk encrypted filesystems (BitLocker / LUKS), and require encrypted remote backends (e.g. AWS S3 + KMS, Terraform Cloud) in team environments.
+- The `jwt_secret` variable has no insecure default and requires explicit configuration.
+
+### Relationship with the DevOps Stack
+- **Docker Compose**: Rapid local developer workflow (`3000`, `8080`).
+- **Kubernetes**: Multi-replica, self-healing, rolling production deployments (`80`).
+- **Ansible**: In-cluster ConfigMap management, dynamic conditional rollout triggers, and node bootstrapping.
+- **Terraform**: Declarative resource lifecycle management, modular abstractions, and isolated environments (`3001`, `8088`).
 
 ### Key Terraform Commands
 ```bash

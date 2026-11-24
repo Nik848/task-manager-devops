@@ -13,7 +13,7 @@ output "network_name" {
 }
 
 output "log_volume_name" {
-  description = "Name of the Docker persistent volume for application logs"
+  description = "Name of the Docker persistent volume demonstration (note: backend logs to stdout via Pino, not /app/logs)"
   value       = docker_volume.app_logs.name
 }
 
