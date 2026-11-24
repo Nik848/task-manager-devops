@@ -102,12 +102,25 @@
         state: directory
         mode: "0755"
 
-    - name: Generate default containerd configuration with SystemdCgroup enabled
-      ansible.builtin.shell: |
-        containerd config default | sed 's/SystemdCgroup = false/SystemdCgroup = true/' > /etc/containerd/config.toml
-      args:
-        creates: /etc/containerd/config.toml
+    - name: Check if containerd config.toml exists
+      ansible.builtin.stat:
+        path: /etc/containerd/config.toml
+      register: containerd_config_stat
+
+    - name: Generate default containerd configuration if absent or empty
+      ansible.builtin.shell: containerd config default > /etc/containerd/config.toml
+      when: not containerd_config_stat.stat.exists or containerd_config_stat.stat.size == 0
       notify: Restart containerd
+
+    - name: Enforce SystemdCgroup = true in containerd configuration
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: '(\bSystemdCgroup\s*=\s*)false'
+        replace: '\1true'
+      notify: Restart containerd
+
+    - name: Flush handlers to restart containerd if configuration changed
+      ansible.builtin.meta: flush_handlers
 
     - name: Ensure containerd service is enabled and started
       ansible.builtin.systemd:
@@ -135,7 +148,7 @@
         state: present
         filename: kubernetes
 
-    - name: Install kubelet, kubeadm, and kubectl
+    - name: Install kubelet, kubeadm, and kubectl with pinned versions
       ansible.builtin.apt:
         name: "{{ k8s_packages }}"
         state: present
@@ -145,7 +158,7 @@
       ansible.builtin.dpkg_selections:
         name: "{{ item }}"
         selection: hold
-      loop: "{{ k8s_packages }}"
+      loop: "{{ k8s_package_names }}"
 
     - name: Ensure kubelet service is enabled and started
       ansible.builtin.systemd:
@@ -181,27 +194,35 @@
       register: kubeadm_init_output
       when: not admin_conf_stat.stat.exists
 
-    - name: Set up kubeconfig directory for root / admin user
+    - name: Set up predictable kubeconfig directory (/root/.kube)
       ansible.builtin.file:
-        path: "{{ ansible_env.HOME }}/.kube"
+        path: "{{ k8s_admin_kubeconfig_dir }}"
         state: directory
-        mode: "0750"
+        owner: root
+        group: root
+        mode: "0700"
 
-    - name: Copy admin.conf to user kubeconfig
+    - name: Copy admin.conf to predictable kubeconfig location
       ansible.builtin.copy:
         src: /etc/kubernetes/admin.conf
-        dest: "{{ ansible_env.HOME }}/.kube/config"
+        dest: "{{ k8s_admin_kubeconfig }}"
         remote_src: true
+        owner: root
+        group: root
         mode: "0600"
 
     - name: Install Container Network Interface (CNI - Flannel)
       ansible.builtin.command: >-
         kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+      environment:
+        KUBECONFIG: "{{ k8s_admin_kubeconfig }}"
       register: cni_out
       changed_when: "'created' in cni_out.stdout or 'configured' in cni_out.stdout"
 
     - name: Generate fresh worker join command on control plane
       ansible.builtin.command: kubeadm token create --print-join-command
+      environment:
+        KUBECONFIG: "{{ k8s_admin_kubeconfig }}"
       register: join_cmd_raw
       changed_when: false
 

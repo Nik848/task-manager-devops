@@ -74,17 +74,22 @@
       register: cm_verify
       changed_when: false
 
-    - name: 8. Verify sensitive Secret task-manager-secret remains untouched
+    - name: 8. Verify sensitive Secret task-manager-secret exists (never printing secret data)
       ansible.builtin.command: >-
-        kubectl {{ context_flag }} get secret task-manager-secret -n {{ k8s_namespace }}
+        kubectl {{ context_flag }} get secret task-manager-secret -n {{ k8s_namespace }} --ignore-not-found -o jsonpath='{.metadata.name}'
       register: secret_verify
       changed_when: false
+
+    - name: Fail if task-manager-secret is missing
+      ansible.builtin.fail:
+        msg: "CRITICAL: Required Secret 'task-manager-secret' is missing in namespace '{{ k8s_namespace }}'."
+      when: secret_verify.stdout == ''
 
     - name: Display Configuration Management Verification Summary
       ansible.builtin.debug:
         msg:
           - "ConfigMap Status: {{ cm_apply_output.stdout | trim }}"
           - "Rollout Triggered: {{ cm_apply_output.changed }}"
-          - "Secret Preserved: {{ secret_verify.stdout | trim }}"
+          - "Secret Preserved: {{ (secret_verify.stdout != '') | ternary('task-manager-secret (present and untouched)', 'missing') }}"
           - "Configured CORS Origins: {{ app_cors_origin }}"
           - "Configured Environment: {{ app_node_env }}"

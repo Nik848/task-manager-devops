@@ -71,20 +71,48 @@
       register: cm_out
       changed_when: "'configured' in cm_out.stdout or 'created' in cm_out.stdout"
 
-    - name: 6. Check if Kubernetes Secret already exists
+    - name: 6. Check if Backend deployment exists for rollout restart
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} get deployment backend -n {{ k8s_namespace }} --ignore-not-found -o jsonpath='{.metadata.name}'
+      register: backend_dep_check
+      when: cm_out.changed
+      changed_when: false
+
+    - name: 7. Restart Backend deployment after ConfigMap change
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} rollout restart deployment/backend -n {{ k8s_namespace }}
+      when:
+        - cm_out.changed
+        - backend_dep_check.stdout is defined
+        - backend_dep_check.stdout == 'backend'
+
+    - name: 8. Wait for Backend rollout completion if restarted
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} rollout status deployment/backend -n {{ k8s_namespace }} --timeout=120s
+      when:
+        - cm_out.changed
+        - backend_dep_check.stdout is defined
+        - backend_dep_check.stdout == 'backend'
+
+    - name: 9. Verify that required Kubernetes Secret exists
       ansible.builtin.command: >-
         kubectl {{ context_flag }} get secret task-manager-secret -n {{ k8s_namespace }} --ignore-not-found -o jsonpath='{.metadata.name}'
       register: secret_check
       changed_when: false
 
-    - name: 7. Apply Secret template if secret does not exist (protect active credentials)
-      ansible.builtin.command: >-
-        kubectl {{ context_flag }} apply -f {{ manifests }}/secret.yaml
+    - name: 10. Fail if task-manager-secret does not exist
+      ansible.builtin.fail:
+        msg: >
+          CRITICAL ERROR: Required Secret 'task-manager-secret' was not found in namespace '{{ k8s_namespace }}'.
+          Placeholder credentials from k8s/secret.yaml are NEVER automatically applied.
+          Please provision 'task-manager-secret' securely before deploying, e.g.:
+            kubectl create secret generic task-manager-secret \
+              --from-literal=DATABASE_URL='<YOUR_DATABASE_URL>' \
+              --from-literal=JWT_SECRET='<YOUR_JWT_SECRET>' \
+              -n {{ k8s_namespace }}
       when: secret_check.stdout == ''
-      register: secret_apply
-      changed_when: "'created' in secret_apply.stdout"
 
-    - name: 8. Apply Backend and Frontend Services
+    - name: 11. Apply Backend and Frontend Services
       ansible.builtin.command: >-
         kubectl {{ context_flag }} apply -f {{ item }}
       loop:
@@ -93,13 +121,13 @@
       register: svc_out
       changed_when: "'configured' in svc_out.stdout or 'created' in svc_out.stdout"
 
-    - name: 9. Apply Ingress manifest
+    - name: 12. Apply Ingress manifest
       ansible.builtin.command: >-
         kubectl {{ context_flag }} apply -f {{ manifests }}/ingress.yaml
       register: ingress_out
       changed_when: "'configured' in ingress_out.stdout or 'created' in ingress_out.stdout"
 
-    - name: 10. Apply Backend and Frontend Deployments
+    - name: 13. Apply Backend and Frontend Deployments
       ansible.builtin.command: >-
         kubectl {{ context_flag }} apply -f {{ item }}
       loop:
@@ -108,23 +136,23 @@
       register: dep_out
       changed_when: "'configured' in dep_out.stdout or 'created' in dep_out.stdout"
 
-    - name: 11. Wait for Backend deployment rollout to complete
+    - name: 14. Wait for Backend deployment rollout to complete
       ansible.builtin.command: >-
         kubectl {{ context_flag }} rollout status deployment/backend -n {{ k8s_namespace }} --timeout=120s
       changed_when: false
 
-    - name: 12. Wait for Frontend deployment rollout to complete
+    - name: 15. Wait for Frontend deployment rollout to complete
       ansible.builtin.command: >-
         kubectl {{ context_flag }} rollout status deployment/frontend -n {{ k8s_namespace }} --timeout=120s
       changed_when: false
 
-    - name: 13. Query and display running pods
+    - name: 16. Query and display running pods
       ansible.builtin.command: >-
         kubectl {{ context_flag }} get pods -n {{ k8s_namespace }} -o wide
       register: pods_status
       changed_when: false
 
-    - name: 14. Query and display active services
+    - name: 17. Query and display active services
       ansible.builtin.command: >-
         kubectl {{ context_flag }} get svc -n {{ k8s_namespace }}
       register: svc_status
@@ -137,3 +165,4 @@
           - "{{ pods_status.stdout_lines }}"
           - "Services Status:"
           - "{{ svc_status.stdout_lines }}"
+          - "ConfigMap Rollout Triggered: {{ cm_out.changed }}"

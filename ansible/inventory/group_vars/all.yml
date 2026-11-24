@@ -30,9 +30,18 @@ docker_packages:
   - docker-compose-plugin
 
 # Kubernetes Installation Settings (for conventional Ubuntu Linux hosts via kubeadm)
+# Kubernetes v1.31 release aligned with pinned apt packages
+k8s_minor_version: "1.31"
 k8s_apt_release: "v1.31"
+k8s_package_version: "1.31.0-1.1"
 k8s_packages:
+  - "kubelet={{ k8s_package_version }}"
+  - "kubeadm={{ k8s_package_version }}"
+  - "kubectl={{ k8s_package_version }}"
+k8s_package_names:
   - kubelet
   - kubeadm
   - kubectl
 k8s_pod_network_cidr: "10.244.0.0/16"
+k8s_admin_kubeconfig_dir: "/root/.kube"
+k8s_admin_kubeconfig: "/root/.kube/config"

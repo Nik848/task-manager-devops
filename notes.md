@@ -323,8 +323,8 @@ ansible/
 ```
 
 ### Distinction Between Environments
-- **`install_docker.yml` & `install_kubernetes.yml`**: Designed, syntax-verified (`--syntax-check`), and preflight-guarded for conventional bare-metal or cloud Ubuntu Linux virtual machines. Both contain safety guards when run under WSL2 to avoid corrupting or resetting the host's existing Docker Desktop engine and Kubernetes cluster. They were not executed on live servers as no remote Linux targets were provisioned.
-- **`deploy_application.yml` & `configure_application.yml`**: Operationally executed and verified against the active Docker Desktop Kubernetes cluster (`docker-desktop`), managing live deployments, rollouts, and ConfigMaps safely with conditional rollout restarts.
+- **`install_docker.yml` & `install_kubernetes.yml`**: Designed, syntax-verified (`--syntax-check`), and preflight-guarded for conventional bare-metal or cloud Ubuntu Linux virtual machines. Features include idempotent containerd setup with enforced `SystemdCgroup = true`, pinned Kubernetes `v1.31` packages (`1.31.0-1.1`), predictable `/root/.kube/config` paths, and in-memory join token distribution. Both contain safety guards when run under WSL2 to avoid corrupting or resetting the host's existing Docker Desktop engine and Kubernetes cluster. They were not executed on live servers as no remote Linux targets were provisioned.
+- **`deploy_application.yml` & `configure_application.yml`**: Operationally executed and verified against the active Docker Desktop Kubernetes cluster (`docker-desktop`), managing live deployments, rollouts, and ConfigMaps safely with conditional rollout restarts. Strict secret protection ensures placeholder credentials from `k8s/secret.yaml` are never automatically applied, failures occur if the Secret is missing, and secret data is never exposed in output.
 
 ### Key Ansible Commands
 ```bash
