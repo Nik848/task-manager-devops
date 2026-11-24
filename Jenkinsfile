@@ -11,7 +11,7 @@ pipeline {
     environment {
         // Container Registry Configuration
         REGISTRY            = 'ghcr.io'
-        GHCR_OWNER          = 'Nik848'
+        GHCR_OWNER          = 'nik848'
         BACKEND_IMAGE_NAME  = 'task-manager-devops-backend'
         FRONTEND_IMAGE_NAME = 'task-manager-devops-frontend'
         
@@ -193,15 +193,16 @@ pipeline {
                     sleep 5
 
                     echo "1. Testing Backend health endpoint..."
-                    # Probe through Kubernetes backend service or local ingress
-                    kubectl run smoke-curl-test --image=curlimages/curl:8.10.1 --rm -i --restart=Never -n ${KUBE_NAMESPACE} -- \
-                        curl -s -f http://backend-service:3000/health || curl -s -f http://localhost/health || true
+                    curl -s -f http://host.docker.internal/health || \
+                    kubectl exec deployment/${BACKEND_DEPLOYMENT} -n ${KUBE_NAMESPACE} -- \
+                        node -e "fetch('http://localhost:3000/health').then(r=>{if(!r.ok)process.exit(1)})"
 
                     echo "2. Testing Frontend service response..."
-                    kubectl run smoke-frontend-test --image=curlimages/curl:8.10.1 --rm -i --restart=Never -n ${KUBE_NAMESPACE} -- \
-                        curl -s -I -f http://frontend-service:80/ || curl -s -I -f http://localhost/ || true
+                    curl -s -f -I http://host.docker.internal/ || \
+                    kubectl exec deployment/${FRONTEND_DEPLOYMENT} -n ${KUBE_NAMESPACE} -- \
+                        nginx -t
 
-                    echo "Smoke testing completed successfully."
+                    echo "Smoke testing completed successfully!"
                 '''
             }
         }
