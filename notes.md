@@ -152,43 +152,78 @@ Kubernetes does all of this.
 
 ```
 Namespace: task-manager
- ├── ConfigMap: task-manager-config (PORT, NODE_ENV, CORS)
- ├── Secret:    task-manager-secret (DATABASE_URL, JWT_SECRET)
- ├── Storage:   postgres-pv & postgres-pvc (Persistent disk claim)
+ ├── ConfigMap: task-manager-config (PORT, NODE_ENV, CORS, LOG_LEVEL)
+ ├── Secret:    task-manager-secret (DATABASE_URL, JWT_SECRET, ADMIN_EMAIL, ADMIN_PASSWORD)
+ ├── Storage:   task-manager-pv & task-manager-pvc (1Gi persistent volume mounted at /app/logs)
  │
  ├── Frontend Service (LoadBalancer -> localhost:80)
- │    └── Frontend Deployment (2 Replicas: Nginx + React)
- │         └── Reverse-proxies /api/* ──┐
- │                                      ▼
- └── Backend Service (ClusterIP: internal port 3000)
-      └── Backend Deployment (2 Replicas: Node.js Express)
-           └── Connects to Supabase PostgreSQL
+ │    └── Frontend Deployment (2 Replicas: Nginx + Vite React)
+ │         └── Reverse-proxies /api/* and /health ──┐
+ │                                                  ▼
+ └── Backend Service (ClusterIP: internal port 3000 -> backend-service:3000)
+      └── Backend Deployment (2 Replicas: Node.js 20 Express)
+           ├── Mounts task-manager-pvc at /app/logs
+           └── Connects to Supabase Cloud PostgreSQL
 ```
 
 | Kubernetes Manifest | Plain-English Explanation |
 | :--- | :--- |
 | **`namespace.yaml`** | Creates an isolated virtual workspace named `task-manager` so our app doesn't collide with other apps. |
-| **`configmap.yaml`** | Stores non-sensitive settings (like `NODE_ENV=production`, `PORT=3000`). |
+| **`configmap.yaml`** | Stores non-sensitive settings (like `NODE_ENV=production`, `PORT=3000`, `CORS_ORIGIN`). |
 | **`secret.yaml`** | Stores sensitive credentials (like `DATABASE_URL` and `JWT_SECRET`). Keeps secrets out of GitHub. |
-| **`backend-deployment.yaml`** | Runs 2 copies (replicas) of the backend API. If one crashes, Kubernetes restarts it in seconds. |
-| **`backend-service.yaml`** | A stable internal address (`backend-service:3000`) so other pods can talk to the backend even as pods restart and change IP addresses. |
-| **`frontend-deployment.yaml`** | Runs 2 copies of the React/Nginx frontend. |
+| **`task-manager-pv.yaml` & `task-manager-pvc.yaml`** | **Persistent Storage**: Allocates a 1Gi `hostPath` PersistentVolume and claim mounted to `/app/logs` on backend pods for persistent audit logs and attachments, avoiding redundant local DBs while using cloud Supabase PostgreSQL. |
+| **`backend-deployment.yaml`** | Runs 2 copies (replicas) of the backend API (`taskmanager-backend:v1.0.0`), with readiness/liveness probes and volume mount. |
+| **`backend-service.yaml`** | Stable internal address (`backend-service:3000`) so frontend and internal consumers communicate via cluster DNS. |
+| **`frontend-deployment.yaml`** | Runs 2 copies of the React/Nginx frontend (`taskmanager-frontend:v1.0.1`), configured to proxy `/api/` to `backend-service:3000`. |
 | **`frontend-service.yaml`** | Exposes the frontend to the outside world (`LoadBalancer`), mapping port `80` to `http://localhost`. |
-| **`ingress.yaml`** | A smart HTTP router directing `/api` to the backend and `/` to the frontend. |
-| **`postgres-pv.yaml` & `postgres-pvc.yaml`** | Persistent Volume & Claim demonstrating Kubernetes persistent disk storage for evaluation. |
+| **`ingress.yaml`** | HTTP router directing `/api` to the backend service and `/` to the frontend service (`task-manager.local`). |
 | **`rbac.yaml`** | **Role-Based Access Control**: Grants a service account (`task-manager-operator`) restricted permissions without giving full administrator access. |
 
 ### Advanced Kubernetes Concepts Implemented
 1. **Health Checks (Probes)**:
-   - **Readiness Probe**: Kubernetes checks `GET /health`. If the database is disconnected, traffic stops routing to that pod until it recovers.
-   - **Liveness Probe**: Kubernetes checks `GET /`. If the server process freezes, Kubernetes restarts the pod automatically.
+   - **Readiness Probe**: Kubernetes checks `GET /health` on port 3000. If the database is disconnected, traffic stops routing to that pod until it recovers.
+   - **Liveness Probe**: Kubernetes checks `GET /` on port 3000. If the server process freezes, Kubernetes restarts the pod automatically.
 2. **Non-Root Security Context**:
-   - Backend runs as UID `1001` (`appuser`).
+   - Backend runs as UID `1001` (`taskapp`).
    - Frontend runs as UID `101` (`nginx`).
-   - Prevents container breakout attacks.
+   - Drops all capabilities (`drop: [ALL]`) to prevent container breakout.
 3. **Seamless Frontend-to-Backend Reverse Proxy**:
-   - Inside [app/frontend/nginx.conf](file:///c:/Users/nik84/OneDrive/Desktop/task-manager-devops/app/frontend/nginx.conf), Nginx intercepts `/api/*` and forwards it to `http://backend-service:3000`.
-   - Result: No CORS errors, no hardcoded developer IP addresses, works anywhere.
+   - Inside Nginx, all `/api/*` and `/health` requests are forwarded to `http://backend-service:3000`.
+   - Result: No CORS errors, identical behavior across local and cluster environments.
+
+### Phase 4 Required Operations Demonstrations
+
+#### 1. Scaling Operation
+```bash
+# Scale backend deployment up to 4 replicas
+kubectl scale deployment/backend --replicas=4 -n task-manager
+kubectl rollout status deployment/backend -n task-manager
+# Result: deployment "backend" successfully rolled out (4/4 ready)
+
+# Restore backend deployment to 2 replicas
+kubectl scale deployment/backend --replicas=2 -n task-manager
+kubectl rollout status deployment/backend -n task-manager
+# Result: deployment "backend" successfully rolled out (2/2 ready)
+```
+
+#### 2. Rolling Update Operation
+```bash
+# Update backend image to v1.0.1 with rolling update strategy (maxSurge: 1, maxUnavailable: 0)
+kubectl set image deployment/backend backend=taskmanager-backend:v1.0.1 -n task-manager
+kubectl rollout status deployment/backend -n task-manager
+# Result: 1 out of 2 new replicas updated -> old replicas terminated -> deployment "backend" successfully rolled out
+```
+
+#### 3. Rollback Operation
+```bash
+# Inspect rollout history
+kubectl rollout history deployment/backend -n task-manager
+
+# Undo the last rollout to restore the previous revision (v1.0.0)
+kubectl rollout undo deployment/backend -n task-manager
+kubectl rollout status deployment/backend -n task-manager
+# Result: deployment.apps/backend rolled back -> deployment "backend" successfully rolled out (restored to taskmanager-backend:v1.0.0)
+```
 
 ---
 

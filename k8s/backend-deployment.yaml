@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: task-manager-devops-backend:v1.0.0
+          image: taskmanager-backend:v1.0.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -66,4 +66,11 @@ spec:
             capabilities:
               drop:
                 - ALL
+          volumeMounts:
+            - name: app-storage
+              mountPath: /app/logs
+      volumes:
+        - name: app-storage
+          persistentVolumeClaim:
+            claimName: task-manager-pvc
       restartPolicy: Always

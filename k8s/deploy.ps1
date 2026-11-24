@@ -101,8 +101,8 @@ if (-not [string]::IsNullOrEmpty($secretExists)) {
 
 # 5. Apply Persistent Volume & Persistent Volume Claim
 Write-Step "Applying PV and PVC"
-kubectl apply -f "$PSScriptRoot/postgres-pv.yaml"
-kubectl apply -f "$PSScriptRoot/postgres-pvc.yaml"
+kubectl apply -f "$PSScriptRoot/task-manager-pv.yaml"
+kubectl apply -f "$PSScriptRoot/task-manager-pvc.yaml"
 Write-Success "PV and PVC applied."
 
 # 6. Apply RBAC

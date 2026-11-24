@@ -52,7 +52,7 @@ The application is deployed across a dedicated namespace (`task-manager`), orche
 ### Key Supporting Components:
 - **`ConfigMap` (`task-manager-config`)**: Injects non-sensitive environment variables (`NODE_ENV`, `PORT`, `CORS_ORIGIN`, `LOG_LEVEL`, `ADMIN_NAME`).
 - **`Secret` (`task-manager-secret`)**: Safely stores sensitive credentials (`DATABASE_URL`, `JWT_SECRET`, admin credentials).
-- **`PersistentVolume` & `PersistentVolumeClaim` (`postgres-pv`, `postgres-pvc`)**: Demonstrates bound local hostPath storage (`manual` storage class, 1Gi) to fulfill academic stateful storage criteria without modifying the live Supabase database.
+- **`PersistentVolume` & `PersistentVolumeClaim` (`task-manager-pv`, `task-manager-pvc`)**: Demonstrates bound local hostPath storage (`manual` storage class, 1Gi) for application file uploads and persistent audit logs without modifying the live Supabase database.
 - **`RBAC` (`task-manager-operator`, `task-manager-role`, `task-manager-rolebinding`)**: Grants granular operational permissions restricted strictly to the `task-manager` namespace without unnecessary cluster-admin privileges.
 
 ---
@@ -69,8 +69,8 @@ k8s/
 ├── frontend-deployment.yaml   # React + Nginx Deployment (2 replicas, non-root user)
 ├── frontend-service.yaml      # LoadBalancer Service exposing frontend on port 80 (localhost)
 ├── ingress.yaml               # Ingress routing /api to backend and / to frontend
-├── postgres-pv.yaml           # PersistentVolume specification (1Gi)
-├── postgres-pvc.yaml          # PersistentVolumeClaim bound to postgres-pv
+├── task-manager-pv.yaml       # PersistentVolume specification (1Gi)
+├── task-manager-pvc.yaml      # PersistentVolumeClaim bound to task-manager-pv
 ├── rbac.yaml                  # ServiceAccount, Role, and RoleBinding (Least Privilege)
 ├── deploy.ps1                 # Automated PowerShell deployment script
 └── README.md                  # Comprehensive documentation and verification manual
@@ -173,7 +173,7 @@ The script automatically:
 1. Validates `kubectl` and cluster connectivity.
 2. Creates the `task-manager` namespace.
 3. Applies ConfigMap and provisions Secret from local `.env`.
-4. Provisions Persistent Volume (`postgres-pv`) and Claim (`postgres-pvc`).
+4. Provisions Persistent Volume (`task-manager-pv`) and Claim (`task-manager-pvc`).
 5. Configures RBAC ServiceAccount and RoleBindings.
 6. Deploys Backend & Frontend Services and Deployments.
 7. Waits for rollout completion and prints endpoints.
@@ -191,8 +191,8 @@ kubectl apply -f k8s/configmap.yaml
 kubectl apply -f k8s/secret.yaml
 
 # 4. Apply Storage Manifests
-kubectl apply -f k8s/postgres-pv.yaml
-kubectl apply -f k8s/postgres-pvc.yaml
+kubectl apply -f k8s/task-manager-pv.yaml
+kubectl apply -f k8s/task-manager-pvc.yaml
 
 # 5. Apply RBAC
 kubectl apply -f k8s/rbac.yaml
@@ -281,8 +281,8 @@ kubectl get pods -n task-manager -l app=backend
 ### E. Demonstrate Persistent Storage
 Check that the PersistentVolume and PersistentVolumeClaim are properly bound:
 ```bash
-kubectl get pv postgres-pv
-kubectl get pvc postgres-pvc -n task-manager
+kubectl get pv task-manager-pv
+kubectl get pvc task-manager-pvc -n task-manager
 ```
 *Expected Result*: `STATUS: Bound` on both resources.
 
