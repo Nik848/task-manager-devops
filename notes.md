@@ -171,7 +171,7 @@ Namespace: task-manager
 | **`namespace.yaml`** | Creates an isolated virtual workspace named `task-manager` so our app doesn't collide with other apps. |
 | **`configmap.yaml`** | Stores non-sensitive settings (like `NODE_ENV=production`, `PORT=3000`, `CORS_ORIGIN`). |
 | **`secret.yaml`** | Stores sensitive credentials (like `DATABASE_URL` and `JWT_SECRET`). Keeps secrets out of GitHub. |
-| **`task-manager-pv.yaml` & `task-manager-pvc.yaml`** | **Persistent Storage**: Allocates a 1Gi `hostPath` PersistentVolume and claim mounted to `/app/logs` on backend pods for persistent audit logs and attachments, avoiding redundant local DBs while using cloud Supabase PostgreSQL. |
+| **`task-manager-pv.yaml` & `task-manager-pvc.yaml`** | **Persistent Storage (Academic Demonstration)**: Allocates a 1Gi `hostPath` PersistentVolume and claim mounted to `/app/logs` on backend pods to demonstrate persistent volume claims without running an unneeded, duplicate local database. |
 | **`backend-deployment.yaml`** | Runs 2 copies (replicas) of the backend API (`taskmanager-backend:v1.0.0`), with readiness/liveness probes and volume mount. |
 | **`backend-service.yaml`** | Stable internal address (`backend-service:3000`) so frontend and internal consumers communicate via cluster DNS. |
 | **`frontend-deployment.yaml`** | Runs 2 copies of the React/Nginx frontend (`taskmanager-frontend:v1.0.1`), configured to proxy `/api/` to `backend-service:3000`. |
@@ -224,6 +224,29 @@ kubectl rollout undo deployment/backend -n task-manager
 kubectl rollout status deployment/backend -n task-manager
 # Result: deployment.apps/backend rolled back -> deployment "backend" successfully rolled out (restored to taskmanager-backend:v1.0.0)
 ```
+
+### 4. Persistent Storage Architecture & Verification
+
+#### Application Storage Audit
+- **Application Logging**: The backend uses Pino (`app/backend/src/logger.js`) and outputs all structured logs directly to `process.stdout` (standard 12-factor container design). It does **not** write log files to `/app/logs`.
+- **Features**: The application does not implement file attachments or file-based audit records; all state is managed inside the cloud-hosted Supabase PostgreSQL database.
+- **PV / PVC Purpose**: `task-manager-pv` and `task-manager-pvc` mount a 1Gi volume at `/app/logs` to demonstrate Kubernetes stateful storage without running a redundant local database.
+
+#### Volume Permissions for Non-Root UID 1001
+- By default, Kubernetes `hostPath` volumes mount with `root:root` ownership (mode `0755`), preventing non-root containers (like `taskapp`, UID 1001) from writing.
+- Furthermore, `fsGroup` is not honored by Kubernetes for `hostPath` volume types.
+- **Resolution**: An `initContainer` (`init-storage-permissions`) using the cached backend image runs before the app starts to execute `chown -R 1001:1001 /app/logs && chmod -R 775 /app/logs`. This grants write access to UID 1001 while keeping the application container non-root (`runAsNonRoot: true`).
+
+#### Node-Local Limitations of `hostPath`
+> [!IMPORTANT]
+> **Node-Local Limitation**: `hostPath` volumes bind to a specific directory on the host node (`/run/desktop/mnt/host/c/...`). While data persists across pod restarts and crashes on the **same node**, `hostPath` does **not** persist data if a pod is rescheduled to a different node in a multi-node cluster, nor does it protect against node failure. For multi-node production clusters, a network-attached storage provisioner (such as AWS EBS, Azure Disk, NFS, or Ceph) is required.
+
+#### Persistence Test Across Pod Deletion
+1. **Write from Pod A**: Wrote test file `/app/logs/persistence-verification.txt` from pod `backend-84498dc6cf-85vjm`.
+2. **Read from Pod B**: Read identical content from second replica `backend-84498dc6cf-rfdtx`, confirming multi-pod read access on the single-node mount.
+3. **Delete Pod A**: Terminated pod `backend-84498dc6cf-85vjm`. Kubernetes started replacement pod `backend-84498dc6cf-krdgd`.
+4. **Verification**: Replacement pod read `/app/logs/persistence-verification.txt` successfully via `task-manager-pvc`.
+5. **Clean up**: Removed the temporary verification file.
 
 ---
 

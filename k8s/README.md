@@ -52,7 +52,7 @@ The application is deployed across a dedicated namespace (`task-manager`), orche
 ### Key Supporting Components:
 - **`ConfigMap` (`task-manager-config`)**: Injects non-sensitive environment variables (`NODE_ENV`, `PORT`, `CORS_ORIGIN`, `LOG_LEVEL`, `ADMIN_NAME`).
 - **`Secret` (`task-manager-secret`)**: Safely stores sensitive credentials (`DATABASE_URL`, `JWT_SECRET`, admin credentials).
-- **`PersistentVolume` & `PersistentVolumeClaim` (`task-manager-pv`, `task-manager-pvc`)**: Demonstrates bound local hostPath storage (`manual` storage class, 1Gi) for application file uploads and persistent audit logs without modifying the live Supabase database.
+- **`PersistentVolume` & `PersistentVolumeClaim` (`task-manager-pv`, `task-manager-pvc`)**: Demonstrates bound local hostPath storage (`manual` storage class, 1Gi) mounted at `/app/logs` for stateful storage verification without running a redundant local database. Note: In multi-node clusters, `hostPath` is strictly node-local; cloud persistent disks (e.g. AWS EBS, Azure Disk) should be used instead.
 - **`RBAC` (`task-manager-operator`, `task-manager-role`, `task-manager-rolebinding`)**: Grants granular operational permissions restricted strictly to the `task-manager` namespace without unnecessary cluster-admin privileges.
 
 ---
