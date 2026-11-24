@@ -2,35 +2,15 @@ pipeline {
     agent any
 
     options {
-        timeout(time: 30, unit: 'MINUTES')
-        buildDiscarder(logRotator(numToKeepStr: '15', artifactNumToKeepStr: '15'))
+        timeout(time: 20, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
         disableConcurrentBuilds()
         ansiColor('xterm')
     }
 
-    environment {
-        // Container Registry Configuration
-        REGISTRY            = 'ghcr.io'
-        GHCR_OWNER          = 'nik848'
-        BACKEND_IMAGE_NAME  = 'task-manager-devops-backend'
-        FRONTEND_IMAGE_NAME = 'task-manager-devops-frontend'
-        
-        // Dynamic Immutable Image Tags
-        IMAGE_TAG           = "${BUILD_NUMBER}-${GIT_COMMIT ? GIT_COMMIT.take(7) : 'manual'}"
-        BACKEND_IMAGE       = "${REGISTRY}/${GHCR_OWNER}/${BACKEND_IMAGE_NAME}:${IMAGE_TAG}"
-        FRONTEND_IMAGE      = "${REGISTRY}/${GHCR_OWNER}/${FRONTEND_IMAGE_NAME}:${IMAGE_TAG}"
-        
-        // Kubernetes Deployment Configuration
-        KUBE_NAMESPACE      = 'task-manager'
-        BACKEND_DEPLOYMENT  = 'backend'
-        BACKEND_CONTAINER   = 'backend'
-        FRONTEND_DEPLOYMENT = 'frontend'
-        FRONTEND_CONTAINER  = 'frontend'
-
-        // Security Scanner Configuration
-        // Note: Set TRIVY_EXIT_CODE=1 in production to fail build on High/Critical CVEs
-        TRIVY_SEVERITY      = 'HIGH,CRITICAL'
-        TRIVY_EXIT_CODE     = '0'
+    triggers {
+        // Poll GitHub every minute for new commits on develop branch
+        pollSCM('* * * * *')
     }
 
     stages {
@@ -42,199 +22,106 @@ pipeline {
                 sh '''
                     echo "Git Branch: ${GIT_BRANCH}"
                     echo "Git Commit: ${GIT_COMMIT}"
-                    echo "Build Tag:  ${IMAGE_TAG}"
                 '''
             }
         }
 
-        // ── Stage 2: Backend Validation ──────────────────────────────────────
-        stage('Backend Validation') {
+        // ── Stage 2: Dependency Installation ──────────────────────────────────
+        stage('Dependency Installation') {
             steps {
-                echo "=== [STAGE 2] Installing backend dependencies and validating syntax ==="
-                dir('app/backend') {
-                    sh '''
-                        echo "Installing backend dependencies via lockfile..."
-                        npm ci --prefer-offline
-                        
-                        echo "Validating JavaScript syntax and configuration imports..."
-                        node --check src/index.js
-                        node --check src/config.js
-                        node --check src/routes/tasks.js
-                        node --check src/routes/auth.js
-
-                        echo "Running tests if defined..."
-                        npm test --if-present
-                    '''
-                }
-            }
-        }
-
-        // ── Stage 3: Frontend Validation ─────────────────────────────────────
-        stage('Frontend Validation') {
-            steps {
-                echo "=== [STAGE 3] Installing frontend dependencies and compiling production build ==="
-                dir('app/frontend') {
-                    sh '''
-                        echo "Installing frontend dependencies via lockfile..."
-                        npm ci --prefer-offline
-
-                        echo "Running production build with Vite..."
-                        npm run build
-
-                        echo "Verifying build output dist/ directory..."
-                        test -d dist && test -f dist/index.html
-                    '''
-                }
-            }
-        }
-
-        // ── Stage 4: Docker Build ────────────────────────────────────────────
-        stage('Docker Build') {
-            steps {
-                echo "=== [STAGE 4] Building Docker images for Backend and Frontend ==="
+                echo "=== [STAGE 2] Installing backend and frontend dependencies ==="
                 sh '''
-                    echo "Building Backend Docker image: ${BACKEND_IMAGE}"
-                    docker build \
-                        -t ${BACKEND_IMAGE} \
-                        -t ${BACKEND_IMAGE_NAME}:latest \
-                        ./app/backend
+                    echo "--- Installing Backend Dependencies ---"
+                    cd app/backend
+                    npm ci --prefer-offline
 
-                    echo "Building Frontend Docker image: ${FRONTEND_IMAGE}"
-                    docker build \
-                        --build-arg VITE_API_URL="" \
-                        -t ${FRONTEND_IMAGE} \
-                        -t ${FRONTEND_IMAGE_NAME}:latest \
-                        ./app/frontend
-
-                    echo "Listing built images:"
-                    docker images | grep -E "${BACKEND_IMAGE_NAME}|${FRONTEND_IMAGE_NAME}" | head -n 10
+                    echo "--- Installing Frontend Dependencies ---"
+                    cd ../frontend
+                    npm ci --prefer-offline
                 '''
             }
         }
 
-        // ── Stage 5: Security Scanning (Trivy) ────────────────────────────────
-        stage('Security Scanning') {
+        // ── Stage 3: Build ───────────────────────────────────────────────────
+        stage('Build') {
             steps {
-                echo "=== [STAGE 5] Scanning Docker images for vulnerabilities with Trivy ==="
+                echo "=== [STAGE 3] Building Application ==="
                 sh '''
-                    echo "--- Scanning Backend Image: ${BACKEND_IMAGE} ---"
-                    if command -v trivy >/dev/null 2>&1; then
-                        trivy image --severity ${TRIVY_SEVERITY} --exit-code ${TRIVY_EXIT_CODE} ${BACKEND_IMAGE} || true
-                    else
-                        docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-                            aquasec/trivy:latest image --severity ${TRIVY_SEVERITY} --exit-code ${TRIVY_EXIT_CODE} ${BACKEND_IMAGE} || true
-                    fi
+                    echo "--- Building Frontend (Vite Production Assets) ---"
+                    cd app/frontend
+                    npm run build
 
-                    echo "--- Scanning Frontend Image: ${FRONTEND_IMAGE} ---"
-                    if command -v trivy >/dev/null 2>&1; then
-                        trivy image --severity ${TRIVY_SEVERITY} --exit-code ${TRIVY_EXIT_CODE} ${FRONTEND_IMAGE} || true
-                    else
-                        docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-                            aquasec/trivy:latest image --severity ${TRIVY_SEVERITY} --exit-code ${TRIVY_EXIT_CODE} ${FRONTEND_IMAGE} || true
-                    fi
+                    echo "Verifying compiled production assets in dist/:"
+                    ls -la dist/
                 '''
             }
         }
 
-        // ── Stage 6: GHCR Publishing ─────────────────────────────────────────
-        stage('GHCR Publishing') {
+        // ── Stage 4: Automated Testing ───────────────────────────────────────
+        stage('Automated Testing') {
             steps {
-                echo "=== [STAGE 6] Authenticating and publishing container images to GHCR ==="
-                withCredentials([usernamePassword(
-                    credentialsId: 'ghcr-credentials',
-                    usernameVariable: 'GHCR_USER',
-                    passwordVariable: 'GHCR_TOKEN'
-                )]) {
-                    sh '''
-                        echo "Authenticating to GitHub Container Registry (${REGISTRY})..."
-                        echo "${GHCR_TOKEN}" | docker login ${REGISTRY} -u "${GHCR_USER}" --password-stdin
-
-                        echo "Pushing Backend Image: ${BACKEND_IMAGE}"
-                        docker push ${BACKEND_IMAGE}
-
-                        echo "Pushing Frontend Image: ${FRONTEND_IMAGE}"
-                        docker push ${FRONTEND_IMAGE}
-
-                        echo "Images successfully published to GHCR!"
-                    '''
-                }
-            }
-        }
-
-        // ── Stage 7: Kubernetes Deployment ───────────────────────────────────
-        stage('Kubernetes Deployment') {
-            steps {
-                echo "=== [STAGE 7] Updating Kubernetes Deployments in namespace: ${KUBE_NAMESPACE} ==="
+                echo "=== [STAGE 4] Executing Automated Tests & Integrity Checks ==="
                 sh '''
-                    echo "Updating Backend Deployment image to ${BACKEND_IMAGE}..."
-                    kubectl set image deployment/${BACKEND_DEPLOYMENT} ${BACKEND_CONTAINER}=${BACKEND_IMAGE} -n ${KUBE_NAMESPACE}
+                    echo "--- Running Backend Syntax & Route Integrity Checks ---"
+                    node --check app/backend/src/index.js
+                    node --check app/backend/src/config.js
+                    node --check app/backend/src/routes/tasks.js
+                    node --check app/backend/src/routes/auth.js
+                    node --check app/backend/src/routes/health.js
+                    node --check app/backend/src/routes/users.js
+                    echo "Backend syntax verification: PASSED"
 
-                    echo "Updating Frontend Deployment image to ${FRONTEND_IMAGE}..."
-                    kubectl set image deployment/${FRONTEND_DEPLOYMENT} ${FRONTEND_CONTAINER}=${FRONTEND_IMAGE} -n ${KUBE_NAMESPACE}
+                    echo "--- Checking for npm test scripts ---"
+                    cd app/backend
+                    npm test --if-present
 
-                    echo "Tracking Backend rollout status..."
-                    kubectl rollout status deployment/${BACKEND_DEPLOYMENT} -n ${KUBE_NAMESPACE} --timeout=180s
-
-                    echo "Tracking Frontend rollout status..."
-                    kubectl rollout status deployment/${FRONTEND_DEPLOYMENT} -n ${KUBE_NAMESPACE} --timeout=180s
-
-                    echo "Displaying updated cluster workloads:"
-                    kubectl get deployments,pods,svc -n ${KUBE_NAMESPACE} -o wide
+                    cd ../frontend
+                    npm test --if-present
+                    echo "Automated testing completed."
                 '''
             }
         }
 
-        // ── Stage 8: Smoke Testing ───────────────────────────────────────────
-        stage('Smoke Testing') {
+        // ── Stage 5: Packaging ───────────────────────────────────────────────
+        stage('Packaging') {
             steps {
-                echo "=== [STAGE 8] Executing post-deployment smoke tests ==="
+                echo "=== [STAGE 5] Packaging Application Artifacts ==="
                 sh '''
-                    echo "Waiting 5 seconds for services to settle..."
-                    sleep 5
+                    echo "--- Packaging Frontend Artifacts ---"
+                    mkdir -p release
+                    tar -czf release/taskmanager-frontend.tar.gz -C app/frontend/dist .
 
-                    echo "1. Testing Backend health endpoint..."
-                    curl -s -f http://host.docker.internal/health || \
-                    kubectl exec deployment/${BACKEND_DEPLOYMENT} -n ${KUBE_NAMESPACE} -- \
-                        node -e "fetch('http://localhost:3000/health').then(r=>{if(!r.ok)process.exit(1)})"
+                    echo "--- Packaging Backend Artifacts ---"
+                    tar -czf release/taskmanager-backend.tar.gz -C app/backend package.json package-lock.json src
 
-                    echo "2. Testing Frontend service response..."
-                    curl -s -f -I http://host.docker.internal/ || \
-                    kubectl exec deployment/${FRONTEND_DEPLOYMENT} -n ${KUBE_NAMESPACE} -- \
-                        nginx -t
-
-                    echo "Smoke testing completed successfully!"
+                    echo "Packaged artifacts generated:"
+                    ls -lh release/
                 '''
+                archiveArtifacts artifacts: 'release/*.tar.gz', fingerprint: true
             }
         }
     }
 
-    // ── Stage 9 & Post-Build Reporting ───────────────────────────────────────
     post {
         always {
-            echo "=== [STAGE 9: Cleanup] Cleaning credentials and dangling resources ==="
-            sh '''
-                echo "Logging out from Container Registry..."
-                docker logout ${REGISTRY} || true
-            '''
+            echo "Pipeline run completed."
             cleanWs notFailBuild: true
         }
         success {
             echo """
             ====================================================================
-              CI/CD PIPELINE EXECUTION SUCCEEDED!
-              Branch:     ${GIT_BRANCH}
-              Commit:     ${GIT_COMMIT}
-              Image Tag:  ${IMAGE_TAG}
-              Namespace:  ${KUBE_NAMESPACE}
-              Status:     Deployed & Verified Successfully
+              PHASE 2: JENKINS CONTINUOUS INTEGRATION SUCCESSFUL!
+              Branch:    ${GIT_BRANCH}
+              Commit:    ${GIT_COMMIT}
+              Artifacts: release/taskmanager-frontend.tar.gz
+                         release/taskmanager-backend.tar.gz
             ====================================================================
             """
         }
         failure {
             echo """
             ====================================================================
-              [ERROR] CI/CD PIPELINE EXECUTION FAILED!
-              Check console log output for the failing stage and error details.
+              [ERROR] Jenkins CI Pipeline Execution Failed!
             ====================================================================
             """
         }
