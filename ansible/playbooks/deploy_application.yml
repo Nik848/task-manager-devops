@@ -49,9 +49,25 @@
       register: rbac_out
       changed_when: "'configured' in rbac_out.stdout or 'created' in rbac_out.stdout"
 
-    - name: 5. Ensure non-sensitive ConfigMap is applied
-      ansible.builtin.command: >-
-        kubectl {{ context_flag }} apply -f {{ manifests }}/configmap.yaml
+    - name: 5. Apply non-sensitive ConfigMap from Ansible single source of truth
+      ansible.builtin.shell: |
+        cat <<EOF | kubectl {{ context_flag }} apply -f -
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: task-manager-config
+          namespace: {{ k8s_namespace }}
+          labels:
+            app.kubernetes.io/name: task-manager-config
+            app.kubernetes.io/part-of: task-manager-system
+            managed-by: ansible
+        data:
+          NODE_ENV: "{{ app_node_env }}"
+          PORT: "{{ app_port }}"
+          LOG_LEVEL: "{{ app_log_level }}"
+          CORS_ORIGIN: "{{ app_cors_origin }}"
+          ADMIN_NAME: "{{ app_admin_name }}"
+        EOF
       register: cm_out
       changed_when: "'configured' in cm_out.stdout or 'created' in cm_out.stdout"
 

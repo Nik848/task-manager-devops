@@ -2,61 +2,84 @@
 # ==============================================================================
 # Playbook: install_docker.yml
 # Purpose: Installs Docker Engine, containerd, and Docker Compose plugin on
-#          supported Ubuntu Linux hosts using the official Docker repository.
+#          conventional Ubuntu Linux hosts using the official Docker repository.
+# Note:    This playbook targets remote Linux nodes defined in [docker_nodes].
+#          It is guarded to prevent modifying Docker Desktop on Windows/WSL2.
 # ==============================================================================
+
+- name: Preflight inventory check for Docker nodes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Validate that target hosts are defined in [docker_nodes]
+      ansible.builtin.fail:
+        msg: >
+          PREFLIGHT NOTICE: No target hosts found in [docker_nodes] inventory group.
+          To execute this playbook against a conventional Ubuntu Linux host, add your
+          server details to ansible/inventory/hosts.ini:
+            [docker_nodes]
+            server1 ansible_host=<IP_ADDRESS> ansible_user=<SSH_USER>
+          Docker Desktop on Windows/WSL2 manages its own engine and is intentionally
+          untouched by this playbook.
+      when: groups['docker_nodes'] is not defined or groups['docker_nodes'] | length == 0
 
 - name: Install Docker Engine on Ubuntu Linux Nodes
   hosts: docker_nodes
   become: true
   gather_facts: true
 
-  tasks:
-    - name: Guard - Check for Docker Desktop / WSL2 environment
-      ansible.builtin.debug:
+  pre_tasks:
+    - name: Preflight - Guard against running against Docker Desktop or WSL2
+      ansible.builtin.fail:
         msg: >
-          WSL2 / Docker Desktop environment detected. Docker Engine is already running
-          on the host system and integrated via WSL2. Skipping host daemon installation.
-      when: ansible_virtualization_type is defined and ansible_virtualization_type == 'wsl'
+          CRITICAL SAFETY GUARD: install_docker.yml must NOT be executed on localhost,
+          Docker Desktop, or WSL2. Docker Desktop manages its own engine on the Windows host.
+          This playbook is exclusively for conventional bare-metal or cloud Ubuntu Linux hosts.
+      when:
+        - inventory_hostname in ['localhost', '127.0.0.1'] or (ansible_virtualization_type is defined and ansible_virtualization_type == 'wsl')
 
-    - name: Install prerequisite packages for Docker repository
+    - name: Preflight - Verify target OS is Ubuntu / Debian
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == 'Debian'
+        fail_msg: "This playbook is only designed and tested for Ubuntu / Debian-based distributions."
+
+  tasks:
+    - name: 1. Install prerequisite packages for Docker repository
       ansible.builtin.apt:
         name: "{{ docker_apt_prereqs }}"
         state: present
         update_cache: true
-      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
 
-    - name: Create directory for Docker apt keyrings
+    - name: 2. Create directory for Docker apt keyrings
       ansible.builtin.file:
         path: /etc/apt/keyrings
         state: directory
         mode: "0755"
-      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
 
-    - name: Download official Docker GPG key
+    - name: 3. Download official Docker GPG key
       ansible.builtin.get_url:
         url: https://download.docker.com/linux/ubuntu/gpg
         dest: /etc/apt/keyrings/docker.asc
         mode: "0644"
         force: false
-      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
 
-    - name: Add official Docker apt repository
+    - name: 4. Add official Docker apt repository
       ansible.builtin.apt_repository:
         repo: >-
           deb [arch={{ ansible_architecture | default('amd64') }} signed-by=/etc/apt/keyrings/docker.asc]
           https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
         state: present
         filename: docker
-      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
 
-    - name: Install Docker Engine, containerd, and Docker Compose plugin
+    - name: 5. Install Docker Engine, containerd, and Docker Compose plugin
       ansible.builtin.apt:
         name: "{{ docker_packages }}"
         state: present
         update_cache: true
-      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
 
-    - name: Ensure Docker and containerd services are enabled and started
+    - name: 6. Ensure Docker and containerd services are enabled and started
       ansible.builtin.systemd:
         name: "{{ item }}"
         enabled: true
@@ -64,14 +87,13 @@
       loop:
         - containerd
         - docker
-      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
 
-    - name: Verify Docker installation
+    - name: 7. Verify Docker installation
       ansible.builtin.command: docker --version
       register: docker_version_output
       changed_when: false
 
-    - name: Verify Docker Compose plugin installation
+    - name: 8. Verify Docker Compose plugin installation
       ansible.builtin.command: docker compose version
       register: docker_compose_output
       changed_when: false

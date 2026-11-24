@@ -2,8 +2,9 @@
 # ==============================================================================
 # Playbook: configure_application.yml
 # Purpose: Manages non-sensitive application configuration in Kubernetes ConfigMaps
-#          using Ansible variables. Safely updates task-manager-config without
-#          exposing or overwriting sensitive database credentials or JWT secrets.
+#          using Ansible variables as the single source of truth.
+#          Safely updates task-manager-config and triggers a controlled backend
+#          rollout ONLY when the configuration has changed.
 # ==============================================================================
 
 - name: Manage Application Configuration via Kubernetes ConfigMap
@@ -28,7 +29,7 @@
         kubectl {{ context_flag }} get namespace {{ k8s_namespace }}
       changed_when: false
 
-    - name: 3. Generate and safely apply non-sensitive ConfigMap
+    - name: 3. Apply non-sensitive ConfigMap from Ansible single source of truth
       ansible.builtin.shell: |
         cat <<EOF | kubectl {{ context_flag }} apply -f -
         apiVersion: v1
@@ -50,13 +51,30 @@
       register: cm_apply_output
       changed_when: "'configured' in cm_apply_output.stdout or 'created' in cm_apply_output.stdout"
 
-    - name: 4. Verify task-manager-config ConfigMap exists and inspect contents
+    - name: 4. Trigger controlled backend rollout ONLY when ConfigMap changed
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} rollout restart deployment/backend -n {{ k8s_namespace }}
+      when: cm_apply_output.changed
+      register: backend_restart_out
+
+    - name: 5. Wait for backend rollout completion if configuration changed
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} rollout status deployment/backend -n {{ k8s_namespace }} --timeout=120s
+      when: cm_apply_output.changed
+
+    - name: 6. Verify backend deployment availability
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} get deployment backend -n {{ k8s_namespace }}
+      register: backend_avail
+      changed_when: false
+
+    - name: 7. Verify task-manager-config ConfigMap exists and inspect contents
       ansible.builtin.command: >-
         kubectl {{ context_flag }} get configmap task-manager-config -n {{ k8s_namespace }} -o yaml
       register: cm_verify
       changed_when: false
 
-    - name: 5. Verify sensitive Secret task-manager-secret is intact
+    - name: 8. Verify sensitive Secret task-manager-secret remains untouched
       ansible.builtin.command: >-
         kubectl {{ context_flag }} get secret task-manager-secret -n {{ k8s_namespace }}
       register: secret_verify
@@ -66,6 +84,7 @@
       ansible.builtin.debug:
         msg:
           - "ConfigMap Status: {{ cm_apply_output.stdout | trim }}"
+          - "Rollout Triggered: {{ cm_apply_output.changed }}"
           - "Secret Preserved: {{ secret_verify.stdout | trim }}"
           - "Configured CORS Origins: {{ app_cors_origin }}"
           - "Configured Environment: {{ app_node_env }}"

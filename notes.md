@@ -310,6 +310,7 @@ Ansible runs directly inside **Ubuntu on WSL2** on the Windows 11 host:
 ```text
 ansible/
 ├── ansible.cfg                # Configures inventory, default callbacks, disabled host key checks
+├── requirements.yml           # Required collections (ansible.posix, community.general)
 ├── inventory/
 │   ├── hosts.ini              # Host definitions (local, docker_nodes, k8s_nodes)
 │   └── group_vars/
@@ -322,11 +323,14 @@ ansible/
 ```
 
 ### Distinction Between Environments
-- **`install_docker.yml` & `install_kubernetes.yml`**: Designed and syntax-verified for conventional bare-metal or cloud Ubuntu Linux virtual machines. Both contain safety guards when run under WSL2 to avoid corrupting or resetting the host's existing Docker Desktop engine and Kubernetes cluster.
-- **`deploy_application.yml` & `configure_application.yml`**: Designed for and executed against the active Docker Desktop Kubernetes cluster (`docker-desktop`), managing live deployments, rollouts, and ConfigMaps safely.
+- **`install_docker.yml` & `install_kubernetes.yml`**: Designed, syntax-verified (`--syntax-check`), and preflight-guarded for conventional bare-metal or cloud Ubuntu Linux virtual machines. Both contain safety guards when run under WSL2 to avoid corrupting or resetting the host's existing Docker Desktop engine and Kubernetes cluster. They were not executed on live servers as no remote Linux targets were provisioned.
+- **`deploy_application.yml` & `configure_application.yml`**: Operationally executed and verified against the active Docker Desktop Kubernetes cluster (`docker-desktop`), managing live deployments, rollouts, and ConfigMaps safely with conditional rollout restarts.
 
 ### Key Ansible Commands
 ```bash
+# Install collections from Ubuntu WSL2:
+ansible-galaxy collection install -r requirements.yml
+
 # Validate playbook syntax from Ubuntu WSL2:
 export ANSIBLE_CONFIG=ansible.cfg
 ansible-playbook -i inventory/hosts.ini --syntax-check playbooks/install_docker.yml

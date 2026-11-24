@@ -9,6 +9,7 @@ This directory provides automated provisioning, deployment, and configuration ma
 ```text
 ansible/
 ├── ansible.cfg                # Ansible defaults (inventory, callbacks, privilege settings)
+├── requirements.yml           # Required Ansible collections (ansible.posix, community.general)
 ├── inventory/
 │   ├── hosts.ini              # Host definitions (localhost, docker_nodes, k8s_nodes)
 │   └── group_vars/
@@ -48,10 +49,10 @@ ansible/
 
 | Playbook | Purpose | Target Environment | Execution Status |
 | :--- | :--- | :--- | :--- |
-| **`install_docker.yml`** | Configures official Docker apt repository, installs Docker Engine, containerd, and Compose plugin with systemd management. | Conventional Ubuntu Linux nodes (`docker_nodes`). | **Syntax Verified** (Guard prevents overwriting existing Windows Docker Desktop engine). |
-| **`install_kubernetes.yml`** | Configures kernel modules (`overlay`, `br_netfilter`), sysctl networking, containerd Cgroups, disables swap, installs `kubelet`/`kubeadm`/`kubectl`, and bootstraps cluster. | Conventional bare-metal / cloud Linux VMs (`k8s_nodes`). | **Syntax Verified** (Guard protects active Docker Desktop cluster from kubeadm reset/init). |
-| **`deploy_application.yml`** | Deploys `k8s/` manifests in dependency order (Namespace $\rightarrow$ Storage $\rightarrow$ RBAC $\rightarrow$ Config $\rightarrow$ Services $\rightarrow$ Ingress $\rightarrow$ Deployments) and waits for rollout. | Current cluster (`localhost` with `--context=docker-desktop`). | **Executed & Verified** (15 tasks OK, 0 failed). |
-| **`configure_application.yml`** | Dynamically generates and applies `task-manager-config` ConfigMap using Ansible variables without touching or exposing sensitive secrets. | Current cluster (`localhost` with `--context=docker-desktop`). | **Executed & Verified** (6 tasks OK, 0 failed). |
+| **`install_docker.yml`** | Configures official Docker apt repository, installs Docker Engine, containerd, and Compose plugin with systemd management. | Conventional Ubuntu Linux nodes (`docker_nodes`). | **Syntax-Checked & Guard-Protected** (Not executed on live host: Docker Desktop engine preserved; guarded against execution on localhost/WSL2). |
+| **`install_kubernetes.yml`** | Configures kernel modules (`overlay`, `br_netfilter`), sysctl networking, containerd Cgroups, disables swap, installs version-locked `kubelet`/`kubeadm`/`kubectl`, installs Flannel CNI, and securely propagates join tokens. | Conventional bare-metal / cloud Linux VMs (`k8s_nodes`). | **Syntax-Checked & Guard-Protected** (Not executed on live host: active Docker Desktop cluster preserved; guarded against execution on localhost/WSL2). |
+| **`deploy_application.yml`** | Deploys `k8s/` manifests in strict dependency order, applies dynamic ConfigMap from Ansible single source of truth, and waits for rollout. | Current cluster (`localhost` with `--context=docker-desktop`). | **Operationally Executed & Verified** (15 tasks OK, 0 failed). |
+| **`configure_application.yml`** | Dynamically generates and applies `task-manager-config` ConfigMap using Ansible variables from `group_vars/all.yml`; triggers pod rollout restart *only* when configuration changes. | Current cluster (`localhost` with `--context=docker-desktop`). | **Operationally Executed & Verified** (Idempotency and conditional rollout verified). |
 
 ---
 
@@ -64,12 +65,16 @@ From an Ubuntu WSL2 terminal:
 sudo apt update
 sudo apt install -y ansible python3-pip
 
-# 2. Verify kubectl and context are accessible
+# 2. Install required Ansible collections
+cd /mnt/c/Users/nik84/OneDrive/Desktop/task-manager-devops/ansible
+ansible-galaxy collection install -r requirements.yml
+
+# 3. Verify kubectl and context are accessible
 kubectl config current-context
 # Should return: docker-desktop (or switch using: kubectl config use-context docker-desktop)
 
-# 3. Navigate to repository ansible directory
-cd /mnt/c/Users/nik84/OneDrive/Desktop/task-manager-devops/ansible
+# 4. Set Ansible configuration path
+export ANSIBLE_CONFIG=ansible.cfg
 ```
 
 ---
@@ -90,30 +95,56 @@ ansible-playbook -i inventory/hosts.ini --syntax-check playbooks/deploy_applicat
 ansible-playbook -i inventory/hosts.ini --syntax-check playbooks/configure_application.yml
 ```
 
-### 2. Execute Configuration Management
+### 2. Execute Configuration Management (Single Source of Truth)
 ```bash
 ansible-playbook -i inventory/hosts.ini playbooks/configure_application.yml
 ```
-*Expected Result*:
-```text
-PLAY RECAP *********************************************************************
-localhost                  : ok=6    changed=1    unreachable=0    failed=0    skipped=0
-```
+*Verification of Conditional Rollout*:
+- When ConfigMap values are updated in `group_vars/all.yml`: ConfigMap reports `changed=1`, triggering `kubectl rollout restart deployment/backend`.
+- When ConfigMap values are identical (idempotent run): ConfigMap reports `changed=0`, and the rollout restart task is skipped (`skipped=1`).
 
 ### 3. Execute Application Deployment
 ```bash
 ansible-playbook -i inventory/hosts.ini playbooks/deploy_application.yml
-```
-*Expected Result*:
-```text
-PLAY RECAP *********************************************************************
-localhost                  : ok=15   changed=2    unreachable=0    failed=0    skipped=1
 ```
 
 ### 4. Dry-Run / Check Mode
 ```bash
 ansible-playbook -i inventory/hosts.ini --check playbooks/configure_application.yml
 ```
+
+---
+
+## Remote Linux Provisioning Requirements (`install_docker.yml` & `install_kubernetes.yml`)
+
+To execute `install_docker.yml` or `install_kubernetes.yml` against conventional cloud or on-premise Linux servers:
+
+### Target Host Requirements
+1. **Operating System**: Clean installation of Ubuntu 22.04 LTS or Ubuntu 24.04 LTS (amd64 / arm64).
+2. **Access & Privileges**: SSH access with key-based authentication and passwordless sudo for the configured `ansible_user`.
+3. **Hardware for Kubernetes**: Minimum 2 CPUs, 2 GB RAM per node, unique hostname, MAC address, and product_uuid for every node.
+4. **Network Ports**:
+   - Kubernetes Control Plane: `6443` (API Server), `2379-2380` (etcd), `10250` (Kubelet), `10259` (kube-scheduler), `10257` (kube-controller-manager).
+   - Kubernetes Worker Nodes: `10250` (Kubelet), `30000-32767` (NodePort Services).
+   - Flannel CNI: `8472/UDP` (VXLAN).
+
+### Execution Steps for Remote Hosts
+1. Define target hosts in `ansible/inventory/hosts.ini`:
+   ```ini
+   [docker_nodes]
+   docker-vm1 ansible_host=192.168.1.100 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa
+
+   [k8s_control_plane]
+   k8s-master ansible_host=192.168.1.101 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa
+
+   [k8s_workers]
+   k8s-worker1 ansible_host=192.168.1.102 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa
+   ```
+2. Run installation playbooks:
+   ```bash
+   ansible-playbook -i inventory/hosts.ini playbooks/install_docker.yml
+   ansible-playbook -i inventory/hosts.ini playbooks/install_kubernetes.yml
+   ```
 
 ---
 

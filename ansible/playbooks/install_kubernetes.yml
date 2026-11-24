@@ -1,37 +1,65 @@
 ---
 # ==============================================================================
 # Playbook: install_kubernetes.yml
-# Purpose: Prepares Ubuntu Linux hosts and provisions Kubernetes via kubeadm.
+# Purpose: Prepares conventional Ubuntu Linux hosts and bootstraps Kubernetes via kubeadm.
 #          Installs runtime prerequisites, containerd, kubelet, kubeadm, kubectl.
-#          Separates control-plane initialization from worker-node joining.
+#          Initializes control-plane only when needed, applies CNI (Flannel),
+#          and securely generates/passes worker join commands without storing tokens.
+# Note:    This playbook targets remote Linux nodes defined in [k8s_nodes].
+#          It is guarded to protect Docker Desktop's active cluster from mutation.
 # ==============================================================================
 
-- name: Install and Configure Kubernetes via kubeadm on Ubuntu Linux Nodes
+- name: Preflight inventory check for Kubernetes nodes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Validate that target hosts are defined in [k8s_nodes]
+      ansible.builtin.fail:
+        msg: >
+          PREFLIGHT NOTICE: No target hosts found in [k8s_nodes] inventory group.
+          To execute this playbook against conventional Ubuntu Linux hosts, add your
+          server details to ansible/inventory/hosts.ini:
+            [k8s_control_plane]
+            master1 ansible_host=<IP_ADDRESS> ansible_user=<SSH_USER>
+            [k8s_workers]
+            worker1 ansible_host=<IP_ADDRESS> ansible_user=<SSH_USER>
+          The existing Docker Desktop Kubernetes cluster (v1.36.1) is managed by
+          Docker Desktop and is intentionally untouched by this kubeadm playbook.
+      when: groups['k8s_nodes'] is not defined or groups['k8s_nodes'] | length == 0
+
+- name: Prepare Container Runtime and Kubernetes on All Linux Nodes
   hosts: k8s_nodes
   become: true
   gather_facts: true
 
-  tasks:
-    - name: Guard - Notice for Docker Desktop / WSL2 environment
-      ansible.builtin.debug:
+  pre_tasks:
+    - name: Preflight - Guard against running against Docker Desktop or WSL2
+      ansible.builtin.fail:
         msg: >
-          Notice: Docker Desktop Kubernetes is managed on the host system.
-          This playbook is intended for conventional bare-metal or cloud Ubuntu Linux virtual machines.
-          Skipping kubeadm cluster mutations on WSL2/Docker Desktop.
-      when: ansible_virtualization_type is defined and ansible_virtualization_type == 'wsl'
+          CRITICAL SAFETY GUARD: install_kubernetes.yml must NOT be executed on localhost,
+          Docker Desktop, or WSL2. The current Kubernetes cluster is managed by Docker Desktop.
+          This playbook is exclusively for conventional bare-metal or cloud Ubuntu Linux hosts.
+      when:
+        - inventory_hostname in ['localhost', '127.0.0.1'] or (ansible_virtualization_type is defined and ansible_virtualization_type == 'wsl')
 
+    - name: Preflight - Verify target OS is Ubuntu / Debian
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == 'Debian'
+        fail_msg: "This playbook is only designed and tested for Ubuntu / Debian-based distributions."
+
+  tasks:
     # --- 1. Kernel Modules & System Prerequisites ---
     - name: Disable swap immediately
       ansible.builtin.command: swapoff -a
       changed_when: false
-      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
 
     - name: Disable swap permanently in /etc/fstab
       ansible.builtin.replace:
         path: /etc/fstab
         regexp: '^(\s*[^#\s]+\s+[^#\s]+\s+swap\s+.*)$'
         replace: '# \1'
-      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
 
     - name: Load required kernel modules for container runtime
       community.general.modprobe:
@@ -40,7 +68,14 @@
       loop:
         - overlay
         - br_netfilter
-      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
+
+    - name: Persist kernel modules across reboots
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          overlay
+          br_netfilter
+        mode: "0644"
 
     - name: Configure sysctl parameters for Kubernetes networking
       ansible.posix.sysctl:
@@ -53,23 +88,32 @@
         - { name: "net.bridge.bridge-nf-call-iptables", value: "1" }
         - { name: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
         - { name: "net.ipv4.ip_forward", value: "1" }
-      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
 
     # --- 2. Container Runtime (containerd) Configuration ---
+    - name: Ensure containerd is installed
+      ansible.builtin.apt:
+        name: containerd
+        state: present
+        update_cache: true
+
     - name: Ensure containerd config directory exists
       ansible.builtin.file:
         path: /etc/containerd
         state: directory
         mode: "0755"
-      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
 
-    - name: Configure SystemdCgroup in containerd
+    - name: Generate default containerd configuration with SystemdCgroup enabled
       ansible.builtin.shell: |
         containerd config default | sed 's/SystemdCgroup = false/SystemdCgroup = true/' > /etc/containerd/config.toml
       args:
         creates: /etc/containerd/config.toml
       notify: Restart containerd
-      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
+
+    - name: Ensure containerd service is enabled and started
+      ansible.builtin.systemd:
+        name: containerd
+        enabled: true
+        state: started
 
     # --- 3. Kubernetes Package Installation ---
     - name: Create directory for Kubernetes apt keyrings
@@ -77,65 +121,111 @@
         path: /etc/apt/keyrings
         state: directory
         mode: "0755"
-      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
 
     - name: Download official Kubernetes GPG key
       ansible.builtin.get_url:
         url: "https://pkgs.k8s.io/core:/stable:/{{ k8s_apt_release }}/deb/Release.key"
         dest: /etc/apt/keyrings/kubernetes-apt-keyring.asc
         mode: "0644"
-      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
+        force: false
 
     - name: Add official Kubernetes apt repository
       ansible.builtin.apt_repository:
         repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.asc] https://pkgs.k8s.io/core:/stable:/{{ k8s_apt_release }}/deb/ /"
         state: present
         filename: kubernetes
-      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
 
     - name: Install kubelet, kubeadm, and kubectl
       ansible.builtin.apt:
         name: "{{ k8s_packages }}"
         state: present
         update_cache: true
-      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
 
     - name: Hold Kubernetes packages at installed version
       ansible.builtin.dpkg_selections:
         name: "{{ item }}"
         selection: hold
       loop: "{{ k8s_packages }}"
-      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
 
     - name: Ensure kubelet service is enabled and started
       ansible.builtin.systemd:
         name: kubelet
         enabled: true
         state: started
-      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
-
-    # --- 4. Control Plane Initialization (Control Plane Nodes Only) ---
-    - name: Initialize Kubernetes Control Plane with kubeadm
-      ansible.builtin.command: >-
-        kubeadm init
-        --pod-network-cidr={{ k8s_pod_network_cidr }}
-      register: kubeadm_init_output
-      args:
-        creates: /etc/kubernetes/admin.conf
-      when:
-        - is_control_plane | default(false) | bool
-        - (ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl')
-
-    # --- 5. Worker Node Joining (Worker Nodes Only) ---
-    - name: Join Worker Node to Kubernetes Cluster
-      ansible.builtin.command: "{{ k8s_join_command }}"
-      when:
-        - is_worker | default(false) | bool
-        - k8s_join_command is defined
-        - (ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl')
 
   handlers:
     - name: Restart containerd
       ansible.builtin.systemd:
         name: containerd
         state: restarted
+
+# ==============================================================================
+# Play 3: Control-Plane Node Bootstrap
+# ==============================================================================
+- name: Bootstrap Kubernetes Control Plane
+  hosts: k8s_control_plane
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Check if Kubernetes control plane is already initialized
+      ansible.builtin.stat:
+        path: /etc/kubernetes/admin.conf
+      register: admin_conf_stat
+
+    - name: Initialize Kubernetes Control Plane with kubeadm
+      ansible.builtin.command: >-
+        kubeadm init
+        --pod-network-cidr={{ k8s_pod_network_cidr }}
+        --cri-socket=unix:///run/containerd/containerd.sock
+      register: kubeadm_init_output
+      when: not admin_conf_stat.stat.exists
+
+    - name: Set up kubeconfig directory for root / admin user
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/.kube"
+        state: directory
+        mode: "0750"
+
+    - name: Copy admin.conf to user kubeconfig
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "{{ ansible_env.HOME }}/.kube/config"
+        remote_src: true
+        mode: "0600"
+
+    - name: Install Container Network Interface (CNI - Flannel)
+      ansible.builtin.command: >-
+        kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+      register: cni_out
+      changed_when: "'created' in cni_out.stdout or 'configured' in cni_out.stdout"
+
+    - name: Generate fresh worker join command on control plane
+      ansible.builtin.command: kubeadm token create --print-join-command
+      register: join_cmd_raw
+      changed_when: false
+
+    - name: Store join command securely in-memory for worker nodes
+      ansible.builtin.add_host:
+        name: K8S_JOIN_HOLDER
+        join_command: "{{ join_cmd_raw.stdout }}"
+
+# ==============================================================================
+# Play 4: Worker Nodes Join
+# ==============================================================================
+- name: Join Worker Nodes to Kubernetes Cluster
+  hosts: k8s_workers
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Check if worker node is already joined
+      ansible.builtin.stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf_stat
+
+    - name: Execute join command on worker node
+      ansible.builtin.command: "{{ hostvars['K8S_JOIN_HOLDER']['join_command'] }}"
+      when:
+        - not kubelet_conf_stat.stat.exists
+        - hostvars['K8S_JOIN_HOLDER']['join_command'] is defined
