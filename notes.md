@@ -53,28 +53,87 @@ Our project is a full-stack **Task Management System** with authentication and d
 
 ---
 
-## 3. Containerization with Docker
+## 3. Containerization with Docker (Phase 3 Implementation)
 
 ### Why Docker?
 A container is a lightweight, isolated package containing everything the application needs to run:
 - Code
 - Node.js runtime
-- Dependencies (`node_modules`)
-- Configuration files
+- Production dependencies (`node_modules`)
+- Web server and reverse proxy configuration
 
-### `Dockerfile` vs. `docker-compose.yml`
-- **`Dockerfile` = The Recipe**: Defines how to build a single container image.
-  - **Backend Dockerfile**: Uses Node.js 20 Alpine, creates a secure non-root user (`appuser`), installs packages, and exposes port `3000`.
-  - **Frontend Dockerfile**: Uses a **Multi-Stage Build**:
-    - *Stage 1 (Build)*: Compiles React code into static HTML/JS/CSS using Node.
-    - *Stage 2 (Production)*: Discards Node and copies the static files into a super-fast, tiny **Nginx web server** on port `80`.
-- **`docker-compose.yml` = The Conductor**: Coordinates running both containers together on local computers:
-  - Maps ports: `3000:3000` for backend, `8080:80` for frontend.
-  - Sets up networking so containers can discover each other.
-  - Manages environment variables.
+### Docker Architecture
+```
+                                 Host Machine (Windows 11)
+      ┌────────────────────────────────────────────────────────────────────────┐
+      │                                                                        │
+      │   Browser Access:                                                      │
+      │   http://localhost:8080 ────────┐                                      │
+      │                                 │                                      │
+      │                        Docker Bridge Network                           │
+      │                        (taskmanager-network)                           │
+      │                                 │                                      │
+      │                                 ▼                                      │
+      │                   ┌───────────────────────────┐                        │
+      │                   │   taskmanager-frontend    │                        │
+      │                   │   (Nginx 1.27 Alpine)     │                        │
+      │                   │   Port 80 (mapped: 8080)  │                        │
+      │                   └─────────────┬─────────────┘                        │
+      │                                 │ Reverse Proxy                        │
+      │                                 │ /api/ and /health                    │
+      │                                 ▼                                      │
+      │                   ┌───────────────────────────┐                        │
+      │                   │   taskmanager-backend     │                        │
+      │                   │   (Node.js 20 Alpine)     │                        │
+      │                   │   Port 3000 (mapped: 3000)│                        │
+      │                   └─────────────┬─────────────┘                        │
+      │                                 │ SSL Pooler Connection                │
+      └─────────────────────────────────┼──────────────────────────────────────┘
+                                        ▼
+                           Supabase Cloud PostgreSQL
+```
 
-### The CORS Problem We Solved
-When your frontend (`http://localhost:8080`) communicates with your backend (`http://localhost:3000`), the browser checks **CORS (Cross-Origin Resource Sharing)**. We updated the backend to accept requests from both `8080` (Docker) and `5173` (Vite dev), allowing signups and logins to work seamlessly.
+### Dockerfiles Design
+
+#### 1. Backend Dockerfile (`app/backend/Dockerfile`)
+- **Stage 1 (`deps`)**: Uses `node:20-alpine`, copies `package*.json`, runs `npm ci --omit=dev` and cleans npm cache.
+- **Stage 2 (`runner`)**: Minimal production image copying only necessary `node_modules` and `src` files.
+- **Security**: Runs under unprivileged user `taskapp` (UID 1001) in group `nodejs` (GID 1001).
+- **Healthcheck**: Periodically runs native Node.js fetch against `http://127.0.0.1:3000/health`.
+
+#### 2. Frontend Dockerfile (`app/frontend/Dockerfile`)
+- **Stage 1 (`build`)**: Uses `node:20-alpine`, runs `npm ci`, sets build arguments (`VITE_API_URL`), and compiles the Vite application (`npm run build`) into `dist/`.
+- **Stage 2 (`production`)**: Uses `nginx:1.27-alpine`, copies production assets into `/usr/share/nginx/html`, and applies custom `nginx.conf`.
+- **Security**: Runs unprivileged as `nginx` user with correct file permissions on `/var/cache/nginx`, `/var/log/nginx`, and pid file.
+- **Healthcheck**: Uses BusyBox `wget --spider -q http://127.0.0.1/`.
+
+#### 3. Frontend-to-Backend Reverse Proxy (`app/frontend/nginx.conf`)
+- Serves SPA routing using `try_files $uri $uri/ /index.html;`.
+- Proxies `/api/` requests to `http://backend:3000;` using Docker service DNS.
+- Proxies `/health` to `http://backend:3000;`.
+- Avoids CORS issues and ensures the browser can connect using clean relative paths (`/api/...`).
+
+### Root Docker Compose (`docker-compose.yml`)
+- **Services**:
+  - `backend`: Container name `taskmanager-backend`, ports `3000:3000`, network alias `backend` and `backend-service`, healthcheck on `/health`.
+  - `frontend`: Container name `taskmanager-frontend`, ports `8080:80`, depends on `backend` with `condition: service_healthy`.
+- **Network**: Dedicated bridge network `taskmanager-network`.
+- **Database**: Cloud-managed PostgreSQL on Supabase (`DATABASE_URL` via `app/backend/.env`), eliminating the need for an unnecessary local database container.
+
+### Useful Docker Commands
+```bash
+# Build and start all services in detached mode
+docker compose up -d --build
+
+# View container status and health
+docker compose ps
+
+# View container logs
+docker compose logs -f
+
+# Stop and remove containers
+docker compose down
+```
 
 ---
 
