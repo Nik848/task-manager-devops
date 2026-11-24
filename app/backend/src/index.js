@@ -35,6 +35,20 @@ app.use((req, res, next) => {
 });
 
 // ── Routes ───────────────────────────────────────────────────────────────────
+app.get("/", (req, res) => {
+  res.json({
+    message: "Task Manager API is running",
+    version: "1.0.0",
+    endpoints: {
+      health: "/health",
+      metrics: "/metrics",
+      auth: "/api/auth",
+      tasks: "/api/tasks",
+      users: "/api/users",
+    },
+  });
+});
+
 app.use("/health", healthRoutes);
 app.use("/metrics", metricsRoutes);
 app.use("/api/auth", authRoutes);

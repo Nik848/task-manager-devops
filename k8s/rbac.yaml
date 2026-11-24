@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: task-manager-operator
+  namespace: task-manager
+  labels:
+    app.kubernetes.io/name: task-manager-operator
+    app.kubernetes.io/part-of: task-manager-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: task-manager-role
+  namespace: task-manager
+  labels:
+    app.kubernetes.io/name: task-manager-role
+    app.kubernetes.io/part-of: task-manager-system
+rules:
+  - apiGroups: ["", "apps", "networking.k8s.io"]
+    resources:
+      - pods
+      - pods/log
+      - services
+      - deployments
+      - replicasets
+      - configmaps
+      - persistentvolumeclaims
+      - ingresses
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources:
+      - secrets
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: task-manager-rolebinding
+  namespace: task-manager
+  labels:
+    app.kubernetes.io/name: task-manager-rolebinding
+    app.kubernetes.io/part-of: task-manager-system
+subjects:
+  - kind: ServiceAccount
+    name: task-manager-operator
+    namespace: task-manager
+roleRef:
+  kind: Role
+  name: task-manager-role
+  apiGroup: rbac.authorization.k8s.io

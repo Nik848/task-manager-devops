@@ -1,4 +1,4 @@
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
+const API_URL = import.meta.env.VITE_API_URL !== undefined ? import.meta.env.VITE_API_URL : "";
 
 async function request(path, options = {}) {
   const token = localStorage.getItem("token");
@@ -11,7 +11,7 @@ async function request(path, options = {}) {
     res = await fetch(`${API_URL}${path}`, { ...options, headers });
   } catch {
     throw new Error(
-      `Cannot connect to backend server at ${API_URL}. Please ensure the backend server is running.`
+      `Cannot connect to backend server at ${API_URL || window.location.origin}. Please ensure the backend server is running.`
     );
   }
 
