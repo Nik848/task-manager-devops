@@ -53,28 +53,87 @@ Our project is a full-stack **Task Management System** with authentication and d
 
 ---
 
-## 3. Containerization with Docker
+## 3. Containerization with Docker (Phase 3 Implementation)
 
 ### Why Docker?
 A container is a lightweight, isolated package containing everything the application needs to run:
 - Code
 - Node.js runtime
-- Dependencies (`node_modules`)
-- Configuration files
+- Production dependencies (`node_modules`)
+- Web server and reverse proxy configuration
 
-### `Dockerfile` vs. `docker-compose.yml`
-- **`Dockerfile` = The Recipe**: Defines how to build a single container image.
-  - **Backend Dockerfile**: Uses Node.js 20 Alpine, creates a secure non-root user (`appuser`), installs packages, and exposes port `3000`.
-  - **Frontend Dockerfile**: Uses a **Multi-Stage Build**:
-    - *Stage 1 (Build)*: Compiles React code into static HTML/JS/CSS using Node.
-    - *Stage 2 (Production)*: Discards Node and copies the static files into a super-fast, tiny **Nginx web server** on port `80`.
-- **`docker-compose.yml` = The Conductor**: Coordinates running both containers together on local computers:
-  - Maps ports: `3000:3000` for backend, `8080:80` for frontend.
-  - Sets up networking so containers can discover each other.
-  - Manages environment variables.
+### Docker Architecture
+```
+                                 Host Machine (Windows 11)
+      ┌────────────────────────────────────────────────────────────────────────┐
+      │                                                                        │
+      │   Browser Access:                                                      │
+      │   http://localhost:8080 ────────┐                                      │
+      │                                 │                                      │
+      │                        Docker Bridge Network                           │
+      │                        (taskmanager-network)                           │
+      │                                 │                                      │
+      │                                 ▼                                      │
+      │                   ┌───────────────────────────┐                        │
+      │                   │   taskmanager-frontend    │                        │
+      │                   │   (Nginx 1.27 Alpine)     │                        │
+      │                   │   Port 80 (mapped: 8080)  │                        │
+      │                   └─────────────┬─────────────┘                        │
+      │                                 │ Reverse Proxy                        │
+      │                                 │ /api/ and /health                    │
+      │                                 ▼                                      │
+      │                   ┌───────────────────────────┐                        │
+      │                   │   taskmanager-backend     │                        │
+      │                   │   (Node.js 20 Alpine)     │                        │
+      │                   │   Port 3000 (mapped: 3000)│                        │
+      │                   └─────────────┬─────────────┘                        │
+      │                                 │ SSL Pooler Connection                │
+      └─────────────────────────────────┼──────────────────────────────────────┘
+                                        ▼
+                           Supabase Cloud PostgreSQL
+```
 
-### The CORS Problem We Solved
-When your frontend (`http://localhost:8080`) communicates with your backend (`http://localhost:3000`), the browser checks **CORS (Cross-Origin Resource Sharing)**. We updated the backend to accept requests from both `8080` (Docker) and `5173` (Vite dev), allowing signups and logins to work seamlessly.
+### Dockerfiles Design
+
+#### 1. Backend Dockerfile (`app/backend/Dockerfile`)
+- **Stage 1 (`deps`)**: Uses `node:20-alpine`, copies `package*.json`, runs `npm ci --omit=dev` and cleans npm cache.
+- **Stage 2 (`runner`)**: Minimal production image copying only necessary `node_modules` and `src` files.
+- **Security**: Runs under unprivileged user `taskapp` (UID 1001) in group `nodejs` (GID 1001).
+- **Healthcheck**: Periodically runs native Node.js fetch against `http://127.0.0.1:3000/health`.
+
+#### 2. Frontend Dockerfile (`app/frontend/Dockerfile`)
+- **Stage 1 (`build`)**: Uses `node:20-alpine`, runs `npm ci`, sets build arguments (`VITE_API_URL`), and compiles the Vite application (`npm run build`) into `dist/`.
+- **Stage 2 (`production`)**: Uses `nginx:1.27-alpine`, copies production assets into `/usr/share/nginx/html`, and applies custom `nginx.conf`.
+- **Security**: Runs unprivileged as `nginx` user with correct file permissions on `/var/cache/nginx`, `/var/log/nginx`, and pid file.
+- **Healthcheck**: Uses BusyBox `wget --spider -q http://127.0.0.1/`.
+
+#### 3. Frontend-to-Backend Reverse Proxy (`app/frontend/nginx.conf`)
+- Serves SPA routing using `try_files $uri $uri/ /index.html;`.
+- Proxies `/api/` requests to `http://backend:3000;` using Docker service DNS.
+- Proxies `/health` to `http://backend:3000;`.
+- Avoids CORS issues and ensures the browser can connect using clean relative paths (`/api/...`).
+
+### Root Docker Compose (`docker-compose.yml`)
+- **Services**:
+  - `backend`: Container name `taskmanager-backend`, ports `3000:3000`, network alias `backend` and `backend-service`, healthcheck on `/health`.
+  - `frontend`: Container name `taskmanager-frontend`, ports `8080:80`, depends on `backend` with `condition: service_healthy`.
+- **Network**: Dedicated bridge network `taskmanager-network`.
+- **Database**: Cloud-managed PostgreSQL on Supabase (`DATABASE_URL` via `app/backend/.env`), eliminating the need for an unnecessary local database container.
+
+### Useful Docker Commands
+```bash
+# Build and start all services in detached mode
+docker compose up -d --build
+
+# View container status and health
+docker compose ps
+
+# View container logs
+docker compose logs -f
+
+# Stop and remove containers
+docker compose down
+```
 
 ---
 
@@ -93,43 +152,101 @@ Kubernetes does all of this.
 
 ```
 Namespace: task-manager
- ├── ConfigMap: task-manager-config (PORT, NODE_ENV, CORS)
- ├── Secret:    task-manager-secret (DATABASE_URL, JWT_SECRET)
- ├── Storage:   postgres-pv & postgres-pvc (Persistent disk claim)
+ ├── ConfigMap: task-manager-config (PORT, NODE_ENV, CORS, LOG_LEVEL)
+ ├── Secret:    task-manager-secret (DATABASE_URL, JWT_SECRET, ADMIN_EMAIL, ADMIN_PASSWORD)
+ ├── Storage:   task-manager-pv & task-manager-pvc (1Gi persistent volume mounted at /app/logs)
  │
  ├── Frontend Service (LoadBalancer -> localhost:80)
- │    └── Frontend Deployment (2 Replicas: Nginx + React)
- │         └── Reverse-proxies /api/* ──┐
- │                                      ▼
- └── Backend Service (ClusterIP: internal port 3000)
-      └── Backend Deployment (2 Replicas: Node.js Express)
-           └── Connects to Supabase PostgreSQL
+ │    └── Frontend Deployment (2 Replicas: Nginx + Vite React)
+ │         └── Reverse-proxies /api/* and /health ──┐
+ │                                                  ▼
+ └── Backend Service (ClusterIP: internal port 3000 -> backend-service:3000)
+      └── Backend Deployment (2 Replicas: Node.js 20 Express)
+           ├── Mounts task-manager-pvc at /app/logs
+           └── Connects to Supabase Cloud PostgreSQL
 ```
 
 | Kubernetes Manifest | Plain-English Explanation |
 | :--- | :--- |
 | **`namespace.yaml`** | Creates an isolated virtual workspace named `task-manager` so our app doesn't collide with other apps. |
-| **`configmap.yaml`** | Stores non-sensitive settings (like `NODE_ENV=production`, `PORT=3000`). |
+| **`configmap.yaml`** | Stores non-sensitive settings (like `NODE_ENV=production`, `PORT=3000`, `CORS_ORIGIN`). |
 | **`secret.yaml`** | Stores sensitive credentials (like `DATABASE_URL` and `JWT_SECRET`). Keeps secrets out of GitHub. |
-| **`backend-deployment.yaml`** | Runs 2 copies (replicas) of the backend API. If one crashes, Kubernetes restarts it in seconds. |
-| **`backend-service.yaml`** | A stable internal address (`backend-service:3000`) so other pods can talk to the backend even as pods restart and change IP addresses. |
-| **`frontend-deployment.yaml`** | Runs 2 copies of the React/Nginx frontend. |
+| **`task-manager-pv.yaml` & `task-manager-pvc.yaml`** | **Persistent Storage (Academic Demonstration)**: Allocates a 1Gi `hostPath` PersistentVolume and claim mounted to `/app/logs` on backend pods to demonstrate persistent volume claims without running an unneeded, duplicate local database. |
+| **`backend-deployment.yaml`** | Runs 2 copies (replicas) of the backend API (`taskmanager-backend:v1.0.0`), with readiness/liveness probes and volume mount. |
+| **`backend-service.yaml`** | Stable internal address (`backend-service:3000`) so frontend and internal consumers communicate via cluster DNS. |
+| **`frontend-deployment.yaml`** | Runs 2 copies of the React/Nginx frontend (`taskmanager-frontend:v1.0.1`), configured to proxy `/api/` to `backend-service:3000`. |
 | **`frontend-service.yaml`** | Exposes the frontend to the outside world (`LoadBalancer`), mapping port `80` to `http://localhost`. |
-| **`ingress.yaml`** | A smart HTTP router directing `/api` to the backend and `/` to the frontend. |
-| **`postgres-pv.yaml` & `postgres-pvc.yaml`** | Persistent Volume & Claim demonstrating Kubernetes persistent disk storage for evaluation. |
+| **`ingress.yaml`** | HTTP router directing `/api` to the backend service and `/` to the frontend service (`task-manager.local`). |
 | **`rbac.yaml`** | **Role-Based Access Control**: Grants a service account (`task-manager-operator`) restricted permissions without giving full administrator access. |
 
 ### Advanced Kubernetes Concepts Implemented
 1. **Health Checks (Probes)**:
-   - **Readiness Probe**: Kubernetes checks `GET /health`. If the database is disconnected, traffic stops routing to that pod until it recovers.
-   - **Liveness Probe**: Kubernetes checks `GET /`. If the server process freezes, Kubernetes restarts the pod automatically.
+   - **Readiness Probe**: Kubernetes checks `GET /health` on port 3000. If the database is disconnected, traffic stops routing to that pod until it recovers.
+   - **Liveness Probe**: Kubernetes checks `GET /` on port 3000. If the server process freezes, Kubernetes restarts the pod automatically.
 2. **Non-Root Security Context**:
-   - Backend runs as UID `1001` (`appuser`).
+   - Backend runs as UID `1001` (`taskapp`).
    - Frontend runs as UID `101` (`nginx`).
-   - Prevents container breakout attacks.
+   - Drops all capabilities (`drop: [ALL]`) to prevent container breakout.
 3. **Seamless Frontend-to-Backend Reverse Proxy**:
-   - Inside [app/frontend/nginx.conf](file:///c:/Users/nik84/OneDrive/Desktop/task-manager-devops/app/frontend/nginx.conf), Nginx intercepts `/api/*` and forwards it to `http://backend-service:3000`.
-   - Result: No CORS errors, no hardcoded developer IP addresses, works anywhere.
+   - Inside Nginx, all `/api/*` and `/health` requests are forwarded to `http://backend-service:3000`.
+   - Result: No CORS errors, identical behavior across local and cluster environments.
+
+### Phase 4 Required Operations Demonstrations
+
+#### 1. Scaling Operation
+```bash
+# Scale backend deployment up to 4 replicas
+kubectl scale deployment/backend --replicas=4 -n task-manager
+kubectl rollout status deployment/backend -n task-manager
+# Result: deployment "backend" successfully rolled out (4/4 ready)
+
+# Restore backend deployment to 2 replicas
+kubectl scale deployment/backend --replicas=2 -n task-manager
+kubectl rollout status deployment/backend -n task-manager
+# Result: deployment "backend" successfully rolled out (2/2 ready)
+```
+
+#### 2. Rolling Update Operation
+```bash
+# Update backend image to v1.0.1 with rolling update strategy (maxSurge: 1, maxUnavailable: 0)
+kubectl set image deployment/backend backend=taskmanager-backend:v1.0.1 -n task-manager
+kubectl rollout status deployment/backend -n task-manager
+# Result: 1 out of 2 new replicas updated -> old replicas terminated -> deployment "backend" successfully rolled out
+```
+
+#### 3. Rollback Operation
+```bash
+# Inspect rollout history
+kubectl rollout history deployment/backend -n task-manager
+
+# Undo the last rollout to restore the previous revision (v1.0.0)
+kubectl rollout undo deployment/backend -n task-manager
+kubectl rollout status deployment/backend -n task-manager
+# Result: deployment.apps/backend rolled back -> deployment "backend" successfully rolled out (restored to taskmanager-backend:v1.0.0)
+```
+
+### 4. Persistent Storage Architecture & Verification
+
+#### Application Storage Audit
+- **Application Logging**: The backend uses Pino (`app/backend/src/logger.js`) and outputs all structured logs directly to `process.stdout` (standard 12-factor container design). It does **not** write log files to `/app/logs`.
+- **Features**: The application does not implement file attachments or file-based audit records; all state is managed inside the cloud-hosted Supabase PostgreSQL database.
+- **PV / PVC Purpose**: `task-manager-pv` and `task-manager-pvc` mount a 1Gi volume at `/app/logs` to demonstrate Kubernetes stateful storage without running a redundant local database.
+
+#### Volume Permissions for Non-Root UID 1001
+- By default, Kubernetes `hostPath` volumes mount with `root:root` ownership (mode `0755`), preventing non-root containers (like `taskapp`, UID 1001) from writing.
+- Furthermore, `fsGroup` is not honored by Kubernetes for `hostPath` volume types.
+- **Resolution**: An `initContainer` (`init-storage-permissions`) using the cached backend image runs before the app starts to execute `chown -R 1001:1001 /app/logs && chmod -R 775 /app/logs`. This grants write access to UID 1001 while keeping the application container non-root (`runAsNonRoot: true`).
+
+#### Node-Local Limitations of `hostPath`
+> [!IMPORTANT]
+> **Node-Local Limitation**: `hostPath` volumes bind to a specific directory on the host node (`/run/desktop/mnt/host/c/...`). While data persists across pod restarts and crashes on the **same node**, `hostPath` does **not** persist data if a pod is rescheduled to a different node in a multi-node cluster, nor does it protect against node failure. For multi-node production clusters, a network-attached storage provisioner (such as AWS EBS, Azure Disk, NFS, or Ceph) is required.
+
+#### Persistence Test Across Pod Deletion
+1. **Write from Pod A**: Wrote test file `/app/logs/persistence-verification.txt` from pod `backend-84498dc6cf-85vjm`.
+2. **Read from Pod B**: Read identical content from second replica `backend-84498dc6cf-rfdtx`, confirming multi-pod read access on the single-node mount.
+3. **Delete Pod A**: Terminated pod `backend-84498dc6cf-85vjm`. Kubernetes started replacement pod `backend-84498dc6cf-krdgd`.
+4. **Verification**: Replacement pod read `/app/logs/persistence-verification.txt` successfully via `task-manager-pvc`.
+5. **Clean up**: Removed the temporary verification file.
 
 ---
 
@@ -234,6 +351,6 @@ powershell -ExecutionPolicy Bypass -File .\jenkins\setup-jenkins.ps1
 | **Monorepo** | Node.js Express backend + React 18 Vite frontend + PostgreSQL database on Supabase. |
 | **Docker** | Secure multi-stage, non-root Dockerfiles for both services + `docker-compose.yml`. |
 | **Kubernetes** | Complete manifests in `k8s/` (Namespace, ConfigMap, Secret, Deployments, Services, PV/PVC, Ingress, RBAC). |
-| **CI/CD** | Production 9-stage declarative `Jenkinsfile` with Trivy scanning, GHCR publishing, and rollout validation. |
+| **CI/CD** | Production 5-stage declarative `Jenkinsfile` with automated build, test, packaging, and SCM push trigger. |
 | **Automation** | One-click PowerShell deployment scripts for Kubernetes (`deploy.ps1`) and Jenkins (`setup-jenkins.ps1`). |
 | **Git & Versioning**| Clean, sanitized repository pushed to GitHub on branch **`develop`** without secret leaks. |

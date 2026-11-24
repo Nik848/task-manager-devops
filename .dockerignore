@@ -1,0 +1,12 @@
+node_modules
+.git
+.env
+.env.*
+dist
+build
+coverage
+*.log
+ansible
+terraform
+k8s
+jenkins

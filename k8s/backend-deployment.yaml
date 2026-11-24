@@ -23,9 +23,20 @@ spec:
         app: backend
         app.kubernetes.io/name: backend
     spec:
+      initContainers:
+        - name: init-storage-permissions
+          image: taskmanager-backend:v1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "chown -R 1001:1001 /app/logs && chmod -R 775 /app/logs"]
+          volumeMounts:
+            - name: app-storage
+              mountPath: /app/logs
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
       containers:
         - name: backend
-          image: task-manager-devops-backend:v1.0.0
+          image: taskmanager-backend:v1.0.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -66,4 +77,11 @@ spec:
             capabilities:
               drop:
                 - ALL
+          volumeMounts:
+            - name: app-storage
+              mountPath: /app/logs
+      volumes:
+        - name: app-storage
+          persistentVolumeClaim:
+            claimName: task-manager-pvc
       restartPolicy: Always

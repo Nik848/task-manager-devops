@@ -2,20 +2,55 @@ version: "3.8"
 
 services:
   backend:
-    build: ./app/backend
+    container_name: taskmanager-backend
+    build:
+      context: ./app/backend
+      dockerfile: Dockerfile
+    image: taskmanager-backend:latest
     ports:
       - "${PORT:-3000}:3000"
     env_file:
       - ./app/backend/.env
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+    networks:
+      app-network:
+        aliases:
+          - backend
+          - backend-service
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
   frontend:
+    container_name: taskmanager-frontend
     build:
       context: ./app/frontend
+      dockerfile: Dockerfile
       args:
-        VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
+        VITE_API_URL: ${VITE_API_URL:-}
+    image: taskmanager-frontend:latest
     ports:
       - "${FRONTEND_PORT:-8080}:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     restart: unless-stopped
+
+networks:
+  app-network:
+    driver: bridge
+    name: taskmanager-network

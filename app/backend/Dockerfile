@@ -1,18 +1,30 @@
-FROM node:20-alpine
+# ── Stage 1: Install production dependencies ────────────────────────────────
+FROM node:20-alpine AS deps
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev && npm cache clean --force
 
+# ── Stage 2: Production runner ──────────────────────────────────────────────
+FROM node:20-alpine AS runner
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm ci --omit=dev
+ENV NODE_ENV=production
+ENV PORT=3000
 
-COPY . .
+# Security: non-root user
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S taskapp -u 1001 -G nodejs
 
-RUN addgroup -g 1001 -S appgroup && \
-    adduser -S appuser -u 1001 -G appgroup && \
-    chown -R appuser:appgroup /app
+# Copy dependencies and application source
+COPY --from=deps --chown=taskapp:nodejs /app/node_modules ./node_modules
+COPY --chown=taskapp:nodejs package*.json ./
+COPY --chown=taskapp:nodejs src ./src
 
-USER appuser
+USER taskapp
 
 EXPOSE 3000
+
+HEALTHCHECK --interval=20s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
 CMD ["node", "src/index.js"]
