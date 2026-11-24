@@ -11,7 +11,8 @@
 4. [Kubernetes (K8s): Production Orchestration](#4-kubernetes-k8s-production-orchestration)
 5. [CI/CD Pipeline with Jenkins](#5-cicd-pipeline-with-jenkins)
 6. [Security & Vulnerability Management](#6-security--vulnerability-management)
-7. [Hands-On DevOps Operations & Cheat Sheet](#7-hands-on-devops-operations--cheat-sheet)
+7. [Ansible Automation & Configuration Management (Phase 5)](#7-ansible-automation--configuration-management-phase-5)
+8. [Hands-On DevOps Operations & Cheat Sheet](#8-hands-on-devops-operations--cheat-sheet)
 
 ---
 
@@ -289,7 +290,63 @@ We built a tailored Jenkins environment (`jenkins/`):
 
 ---
 
-## 7. Hands-On DevOps Operations & Cheat Sheet
+## 7. Ansible Automation & Configuration Management (Phase 5)
+
+### Why Ansible?
+Ansible enables **Infrastructure as Code (IaC)** and automated configuration management without installing client agents on managed nodes. In our monorepo, Ansible automates:
+1. Docker Engine provisioning on Linux hosts (`install_docker.yml`).
+2. Kubernetes node setup via kubeadm (`install_kubernetes.yml`).
+3. Declarative application deployment across Kubernetes (`deploy_application.yml`).
+4. Safe non-sensitive configuration management via ConfigMaps (`configure_application.yml`).
+
+### WSL2 Control Machine Architecture
+Ansible runs directly inside **Ubuntu on WSL2** on the Windows 11 host:
+- **Ansible Core**: `2.20.1` running Python `3.14`.
+- **Integrated Docker**: WSL2 communicates directly with Docker Desktop's engine via named pipes/socket.
+- **Integrated Kubernetes**: WSL2 communicates directly with `desktop-control-plane` using `kubectl --context=docker-desktop`.
+
+### Playbook Inventory and Purposes
+
+```text
+ansible/
+├── ansible.cfg                # Configures inventory, default callbacks, disabled host key checks
+├── inventory/
+│   ├── hosts.ini              # Host definitions (local, docker_nodes, k8s_nodes)
+│   └── group_vars/
+│       └── all.yml            # Non-sensitive variables, ports, and package lists
+└── playbooks/
+    ├── install_docker.yml         # Installs Docker CE & Compose plugin on Ubuntu Linux hosts
+    ├── install_kubernetes.yml     # Provisions kubeadm, containerd, and kubelet on Linux nodes
+    ├── deploy_application.yml     # Orchestrates k8s/ manifests in dependency order on cluster
+    └── configure_application.yml  # Safely manages task-manager-config without exposing secrets
+```
+
+### Distinction Between Environments
+- **`install_docker.yml` & `install_kubernetes.yml`**: Designed and syntax-verified for conventional bare-metal or cloud Ubuntu Linux virtual machines. Both contain safety guards when run under WSL2 to avoid corrupting or resetting the host's existing Docker Desktop engine and Kubernetes cluster.
+- **`deploy_application.yml` & `configure_application.yml`**: Designed for and executed against the active Docker Desktop Kubernetes cluster (`docker-desktop`), managing live deployments, rollouts, and ConfigMaps safely.
+
+### Key Ansible Commands
+```bash
+# Validate playbook syntax from Ubuntu WSL2:
+export ANSIBLE_CONFIG=ansible.cfg
+ansible-playbook -i inventory/hosts.ini --syntax-check playbooks/install_docker.yml
+ansible-playbook -i inventory/hosts.ini --syntax-check playbooks/install_kubernetes.yml
+ansible-playbook -i inventory/hosts.ini --syntax-check playbooks/deploy_application.yml
+ansible-playbook -i inventory/hosts.ini --syntax-check playbooks/configure_application.yml
+
+# Run Configuration Management:
+ansible-playbook -i inventory/hosts.ini playbooks/configure_application.yml
+
+# Run Application Deployment:
+ansible-playbook -i inventory/hosts.ini playbooks/deploy_application.yml
+
+# Dry-run check mode:
+ansible-playbook -i inventory/hosts.ini --check playbooks/configure_application.yml
+```
+
+---
+
+## 8. Hands-On DevOps Operations & Cheat Sheet
 
 ### 1. Run with Docker Compose (Local Dev)
 ```powershell
@@ -344,7 +401,7 @@ powershell -ExecutionPolicy Bypass -File .\jenkins\setup-jenkins.ps1
 
 ---
 
-## 8. Summary of What We Achieved
+## 9. Summary of What We Achieved
 
 | Area | What Was Accomplished |
 | :--- | :--- |
@@ -352,5 +409,6 @@ powershell -ExecutionPolicy Bypass -File .\jenkins\setup-jenkins.ps1
 | **Docker** | Secure multi-stage, non-root Dockerfiles for both services + `docker-compose.yml`. |
 | **Kubernetes** | Complete manifests in `k8s/` (Namespace, ConfigMap, Secret, Deployments, Services, PV/PVC, Ingress, RBAC). |
 | **CI/CD** | Production 5-stage declarative `Jenkinsfile` with automated build, test, packaging, and SCM push trigger. |
+| **Ansible Automation** | 4 production playbooks for Docker, Kubernetes, Application Deployment, and Config Management running from WSL2. |
 | **Automation** | One-click PowerShell deployment scripts for Kubernetes (`deploy.ps1`) and Jenkins (`setup-jenkins.ps1`). |
 | **Git & Versioning**| Clean, sanitized repository pushed to GitHub on branch **`develop`** without secret leaks. |

@@ -1,0 +1,71 @@
+---
+# ==============================================================================
+# Playbook: configure_application.yml
+# Purpose: Manages non-sensitive application configuration in Kubernetes ConfigMaps
+#          using Ansible variables. Safely updates task-manager-config without
+#          exposing or overwriting sensitive database credentials or JWT secrets.
+# ==============================================================================
+
+- name: Manage Application Configuration via Kubernetes ConfigMap
+  hosts: local
+  gather_facts: false
+
+  vars_files:
+    - "../group_vars/all.yml"
+
+  vars:
+    context_flag: "--context={{ k8s_context }}"
+
+  tasks:
+    - name: 1. Verify target cluster connectivity
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} cluster-info
+      register: cluster_check
+      changed_when: false
+
+    - name: 2. Ensure target namespace exists
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} get namespace {{ k8s_namespace }}
+      changed_when: false
+
+    - name: 3. Generate and safely apply non-sensitive ConfigMap
+      ansible.builtin.shell: |
+        cat <<EOF | kubectl {{ context_flag }} apply -f -
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: task-manager-config
+          namespace: {{ k8s_namespace }}
+          labels:
+            app.kubernetes.io/name: task-manager-config
+            app.kubernetes.io/part-of: task-manager-system
+            managed-by: ansible
+        data:
+          NODE_ENV: "{{ app_node_env }}"
+          PORT: "{{ app_port }}"
+          LOG_LEVEL: "{{ app_log_level }}"
+          CORS_ORIGIN: "{{ app_cors_origin }}"
+          ADMIN_NAME: "{{ app_admin_name }}"
+        EOF
+      register: cm_apply_output
+      changed_when: "'configured' in cm_apply_output.stdout or 'created' in cm_apply_output.stdout"
+
+    - name: 4. Verify task-manager-config ConfigMap exists and inspect contents
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} get configmap task-manager-config -n {{ k8s_namespace }} -o yaml
+      register: cm_verify
+      changed_when: false
+
+    - name: 5. Verify sensitive Secret task-manager-secret is intact
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} get secret task-manager-secret -n {{ k8s_namespace }}
+      register: secret_verify
+      changed_when: false
+
+    - name: Display Configuration Management Verification Summary
+      ansible.builtin.debug:
+        msg:
+          - "ConfigMap Status: {{ cm_apply_output.stdout | trim }}"
+          - "Secret Preserved: {{ secret_verify.stdout | trim }}"
+          - "Configured CORS Origins: {{ app_cors_origin }}"
+          - "Configured Environment: {{ app_node_env }}"

@@ -1,0 +1,83 @@
+---
+# ==============================================================================
+# Playbook: install_docker.yml
+# Purpose: Installs Docker Engine, containerd, and Docker Compose plugin on
+#          supported Ubuntu Linux hosts using the official Docker repository.
+# ==============================================================================
+
+- name: Install Docker Engine on Ubuntu Linux Nodes
+  hosts: docker_nodes
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Guard - Check for Docker Desktop / WSL2 environment
+      ansible.builtin.debug:
+        msg: >
+          WSL2 / Docker Desktop environment detected. Docker Engine is already running
+          on the host system and integrated via WSL2. Skipping host daemon installation.
+      when: ansible_virtualization_type is defined and ansible_virtualization_type == 'wsl'
+
+    - name: Install prerequisite packages for Docker repository
+      ansible.builtin.apt:
+        name: "{{ docker_apt_prereqs }}"
+        state: present
+        update_cache: true
+      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
+
+    - name: Create directory for Docker apt keyrings
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
+
+    - name: Download official Docker GPG key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+        force: false
+      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
+
+    - name: Add official Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch={{ ansible_architecture | default('amd64') }} signed-by=/etc/apt/keyrings/docker.asc]
+          https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable
+        state: present
+        filename: docker
+      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
+
+    - name: Install Docker Engine, containerd, and Docker Compose plugin
+      ansible.builtin.apt:
+        name: "{{ docker_packages }}"
+        state: present
+        update_cache: true
+      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
+
+    - name: Ensure Docker and containerd services are enabled and started
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - containerd
+        - docker
+      when: ansible_virtualization_type is not defined or ansible_virtualization_type != 'wsl'
+
+    - name: Verify Docker installation
+      ansible.builtin.command: docker --version
+      register: docker_version_output
+      changed_when: false
+
+    - name: Verify Docker Compose plugin installation
+      ansible.builtin.command: docker compose version
+      register: docker_compose_output
+      changed_when: false
+
+    - name: Display Docker version details
+      ansible.builtin.debug:
+        msg:
+          - "Docker Version: {{ docker_version_output.stdout }}"
+          - "Docker Compose Version: {{ docker_compose_output.stdout }}"

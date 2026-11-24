@@ -1,0 +1,38 @@
+---
+# ==============================================================================
+# Ansible Group Variables: Task Management System (Phase 5)
+# ==============================================================================
+
+# Kubernetes Cluster & Deployment Configuration
+k8s_context: "docker-desktop"
+k8s_namespace: "task-manager"
+k8s_manifests_dir: "{{ playbook_dir }}/../../k8s"
+
+# Non-Sensitive Application Settings (Injected into task-manager-config ConfigMap)
+app_node_env: "production"
+app_port: "3000"
+app_log_level: "info"
+app_cors_origin: "http://localhost,http://localhost:80,http://localhost:8080,http://task-manager.local,*"
+app_admin_name: "Admin"
+
+# Docker Installation Settings (for conventional Ubuntu Linux hosts)
+docker_apt_prereqs:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+  - lsb-release
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+
+# Kubernetes Installation Settings (for conventional Ubuntu Linux hosts via kubeadm)
+k8s_apt_release: "v1.31"
+k8s_packages:
+  - kubelet
+  - kubeadm
+  - kubectl
+k8s_pod_network_cidr: "10.244.0.0/16"

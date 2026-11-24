@@ -1,0 +1,123 @@
+---
+# ==============================================================================
+# Playbook: deploy_application.yml
+# Purpose: Deploys the Task Management System manifests to the Kubernetes cluster
+#          in orderly stages: Namespace, Storage, RBAC, Config, Services, Ingress,
+#          and Deployments. Waits for rollout and verifies pod/service health.
+# ==============================================================================
+
+- name: Deploy Task Management Application to Kubernetes
+  hosts: local
+  gather_facts: false
+
+  vars_files:
+    - "../group_vars/all.yml"
+
+  vars:
+    context_flag: "--context={{ k8s_context }}"
+    manifests: "{{ playbook_dir }}/../../k8s"
+
+  tasks:
+    - name: 1. Verify cluster connectivity and current context
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} cluster-info
+      register: cluster_info
+      changed_when: false
+
+    - name: Display target cluster information
+      ansible.builtin.debug:
+        msg: "{{ cluster_info.stdout_lines[0] | default('Connected to Kubernetes') }}"
+
+    - name: 2. Ensure task-manager namespace exists
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} apply -f {{ manifests }}/namespace.yaml
+      register: ns_out
+      changed_when: "'configured' in ns_out.stdout or 'created' in ns_out.stdout"
+
+    - name: 3. Apply Persistent Volume and Persistent Volume Claim
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} apply -f {{ item }}
+      loop:
+        - "{{ manifests }}/task-manager-pv.yaml"
+        - "{{ manifests }}/task-manager-pvc.yaml"
+      register: storage_out
+      changed_when: "'configured' in storage_out.stdout or 'created' in storage_out.stdout"
+
+    - name: 4. Apply Role-Based Access Control (RBAC) manifests
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} apply -f {{ manifests }}/rbac.yaml
+      register: rbac_out
+      changed_when: "'configured' in rbac_out.stdout or 'created' in rbac_out.stdout"
+
+    - name: 5. Ensure non-sensitive ConfigMap is applied
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} apply -f {{ manifests }}/configmap.yaml
+      register: cm_out
+      changed_when: "'configured' in cm_out.stdout or 'created' in cm_out.stdout"
+
+    - name: 6. Check if Kubernetes Secret already exists
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} get secret task-manager-secret -n {{ k8s_namespace }} --ignore-not-found -o jsonpath='{.metadata.name}'
+      register: secret_check
+      changed_when: false
+
+    - name: 7. Apply Secret template if secret does not exist (protect active credentials)
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} apply -f {{ manifests }}/secret.yaml
+      when: secret_check.stdout == ''
+      register: secret_apply
+      changed_when: "'created' in secret_apply.stdout"
+
+    - name: 8. Apply Backend and Frontend Services
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} apply -f {{ item }}
+      loop:
+        - "{{ manifests }}/backend-service.yaml"
+        - "{{ manifests }}/frontend-service.yaml"
+      register: svc_out
+      changed_when: "'configured' in svc_out.stdout or 'created' in svc_out.stdout"
+
+    - name: 9. Apply Ingress manifest
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} apply -f {{ manifests }}/ingress.yaml
+      register: ingress_out
+      changed_when: "'configured' in ingress_out.stdout or 'created' in ingress_out.stdout"
+
+    - name: 10. Apply Backend and Frontend Deployments
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} apply -f {{ item }}
+      loop:
+        - "{{ manifests }}/backend-deployment.yaml"
+        - "{{ manifests }}/frontend-deployment.yaml"
+      register: dep_out
+      changed_when: "'configured' in dep_out.stdout or 'created' in dep_out.stdout"
+
+    - name: 11. Wait for Backend deployment rollout to complete
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} rollout status deployment/backend -n {{ k8s_namespace }} --timeout=120s
+      changed_when: false
+
+    - name: 12. Wait for Frontend deployment rollout to complete
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} rollout status deployment/frontend -n {{ k8s_namespace }} --timeout=120s
+      changed_when: false
+
+    - name: 13. Query and display running pods
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} get pods -n {{ k8s_namespace }} -o wide
+      register: pods_status
+      changed_when: false
+
+    - name: 14. Query and display active services
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} get svc -n {{ k8s_namespace }}
+      register: svc_status
+      changed_when: false
+
+    - name: Application Deployment Summary
+      ansible.builtin.debug:
+        msg:
+          - "Pods Status:"
+          - "{{ pods_status.stdout_lines }}"
+          - "Services Status:"
+          - "{{ svc_status.stdout_lines }}"
