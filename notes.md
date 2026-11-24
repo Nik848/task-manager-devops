@@ -234,6 +234,6 @@ powershell -ExecutionPolicy Bypass -File .\jenkins\setup-jenkins.ps1
 | **Monorepo** | Node.js Express backend + React 18 Vite frontend + PostgreSQL database on Supabase. |
 | **Docker** | Secure multi-stage, non-root Dockerfiles for both services + `docker-compose.yml`. |
 | **Kubernetes** | Complete manifests in `k8s/` (Namespace, ConfigMap, Secret, Deployments, Services, PV/PVC, Ingress, RBAC). |
-| **CI/CD** | Production 9-stage declarative `Jenkinsfile` with Trivy scanning, GHCR publishing, and rollout validation. |
+| **CI/CD** | Production 5-stage declarative `Jenkinsfile` with automated build, test, packaging, and SCM push trigger. |
 | **Automation** | One-click PowerShell deployment scripts for Kubernetes (`deploy.ps1`) and Jenkins (`setup-jenkins.ps1`). |
 | **Git & Versioning**| Clean, sanitized repository pushed to GitHub on branch **`develop`** without secret leaks. |
