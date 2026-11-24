@@ -350,7 +350,58 @@ ansible-playbook -i inventory/hosts.ini --check playbooks/configure_application.
 
 ---
 
-## 8. Hands-On DevOps Operations & Cheat Sheet
+## 8. Terraform Infrastructure as Code (Phase 6)
+
+### Why Terraform?
+Terraform provides **declarative, reproducible Infrastructure as Code (IaC)**. While Ansible focuses on procedural tasks and configuration management, Terraform manages the complete lifecycle of cloud and container resources via declared state files (`.tfstate`), dependency graphs, and reusable modules.
+
+### Terraform Architecture in Local Docker Desktop
+To avoid any collision with existing environments:
+- **Docker Compose** runs the developer stack on ports `3000` & `8080`.
+- **Kubernetes** orchestrates the production application on port `80`.
+- **Terraform** provisions an alternative, isolated container stack on host ports `3001` (backend) and `8088` (frontend) via a custom bridge network (`taskmanager-tf-network`) and persistent log volume (`taskmanager-tf-logs`).
+
+```text
+terraform/
+├── .gitignore                      # Protects .terraform/, *.tfstate, and *.tfvars
+├── README.md                       # Comprehensive operations guide
+├── main.tf                         # Root configuration, network, volume, module calls
+├── variables.tf                    # Parameterized variables (ports, images, sensitive credentials)
+├── outputs.tf                      # Useful endpoints and container IDs (secrets omitted)
+├── terraform.tfvars.example        # Sanitized template with placeholder secrets
+└── modules/
+    └── docker_container/           # Reusable container module
+        ├── main.tf                 # docker_container resource definition
+        ├── variables.tf            # Module input parameters
+        └── outputs.tf              # Container ID, name, published ports
+```
+
+### Key Terraform Commands
+```bash
+cd terraform
+
+# 1. Format check and validate configuration:
+terraform fmt -check
+terraform init
+terraform validate
+
+# 2. Plan changes:
+terraform plan
+
+# 3. Apply infrastructure:
+terraform apply -auto-approve
+
+# 4. Verify endpoints:
+curl http://localhost:8088/
+curl http://localhost:3001/health
+
+# 5. Clean teardown:
+terraform destroy -auto-approve
+```
+
+---
+
+## 9. Hands-On DevOps Operations & Cheat Sheet
 
 ### 1. Run with Docker Compose (Local Dev)
 ```powershell
@@ -405,7 +456,7 @@ powershell -ExecutionPolicy Bypass -File .\jenkins\setup-jenkins.ps1
 
 ---
 
-## 9. Summary of What We Achieved
+## 10. Summary of What We Achieved
 
 | Area | What Was Accomplished |
 | :--- | :--- |
@@ -414,5 +465,6 @@ powershell -ExecutionPolicy Bypass -File .\jenkins\setup-jenkins.ps1
 | **Kubernetes** | Complete manifests in `k8s/` (Namespace, ConfigMap, Secret, Deployments, Services, PV/PVC, Ingress, RBAC). |
 | **CI/CD** | Production 5-stage declarative `Jenkinsfile` with automated build, test, packaging, and SCM push trigger. |
 | **Ansible Automation** | 4 production playbooks for Docker, Kubernetes, Application Deployment, and Config Management running from WSL2. |
+| **Terraform IaC** | Modular Infrastructure as Code (`kreuzwerker/docker` ~> 3.0.2) with reusable container module, outputs, and isolated stack. |
 | **Automation** | One-click PowerShell deployment scripts for Kubernetes (`deploy.ps1`) and Jenkins (`setup-jenkins.ps1`). |
 | **Git & Versioning**| Clean, sanitized repository pushed to GitHub on branch **`develop`** without secret leaks. |
