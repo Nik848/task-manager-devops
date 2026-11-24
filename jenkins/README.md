@@ -35,7 +35,24 @@ The Jenkins pipeline runs in a specialized container that interfaces seamlessly 
 
 ---
 
-## 2. Quick Setup Instructions
+## 2. Infrastructure & Security Configurations
+
+### A. Docker Socket Permissions (`group_add: ["0"]`)
+On Windows Docker Desktop (WSL 2 backend), the Docker daemon socket `/var/run/docker.sock` has permissions `srw-rw---- (660)` owned by `root:root` (UID 0, GID 0).
+- Standard Jenkins runs as non-root user `jenkins` (UID 1000).
+- **Secure Fix Implemented**: In `docker-compose.yml`, we configure `group_add: ["0"]`.
+- This adds GID 0 (`root`) as a supplementary group for the `jenkins` user process.
+- **Why this is best practice**: It strictly avoids `chmod 666` (which exposes the socket to all users on the host), avoids running the container as root, and avoids dangerous Docker privileged mode (`privileged: true`).
+
+### B. Kubernetes Cluster Connectivity (`host.docker.internal`)
+Inside a Docker container, `127.0.0.1` refers to the container's own network namespace, not the Windows host.
+- The host Kubernetes control plane runs at `https://127.0.0.1:<port>`.
+- **Fix Implemented**: The container mounts `extra_hosts: ["host.docker.internal:host-gateway"]`, and `setup-jenkins.ps1` synchronizes a container-ready configuration to `/var/jenkins_home/.kube/config` using `https://host.docker.internal:<port>` with `insecure-skip-tls-verify: true`.
+- Because `/var/jenkins_home` is backed by the named volume `jenkins_home`, this configuration is fully persistent.
+
+---
+
+## 3. Quick Setup Instructions
 
 Run the setup script from PowerShell to build the custom Jenkins image and start the container:
 

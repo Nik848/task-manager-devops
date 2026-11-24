@@ -86,24 +86,42 @@ Write-Step "Verifying Docker socket access from inside Jenkins container"
 try {
     $dockerVerInside = (docker exec jenkins-devops docker version --format '{{.Server.Version}}' 2>$null)
     if ($dockerVerInside) {
-        Write-Success "Docker inside Jenkins is connected to host Docker Engine (v$dockerVerInside)!"
+        Write-Success "Docker inside Jenkins is connected to host Docker Engine (v$dockerVerInside) via group_add!"
     } else {
-        Write-Warn "Could not verify Docker Engine from inside container. Checking socket permissions..."
-        docker exec -u root jenkins-devops chmod 666 /var/run/docker.sock
-        $dockerVerInside = (docker exec jenkins-devops docker version --format '{{.Server.Version}}')
-        Write-Success "Permissions updated. Docker Engine connected: v$dockerVerInside"
+        throw "Could not reach Docker daemon from inside container."
     }
 } catch {
-    Write-Warn "Ensure /var/run/docker.sock is shared in Docker Desktop settings."
+    Write-Warn "Docker access check failed: $_"
 }
 
-# 6. Verify kubectl from inside Jenkins
-Write-Step "Verifying kubectl availability inside Jenkins container"
+# 6. Configure and verify Kubernetes connectivity inside Jenkins
+Write-Step "Configuring and verifying Kubernetes connectivity inside Jenkins container"
 try {
-    $kubeVer = (docker exec jenkins-devops kubectl version --client -o yaml 2>$null)
-    Write-Success "kubectl is operational inside Jenkins."
+    $hostKubeConfig = Join-Path $HOME ".kube\config"
+    if (Test-Path $hostKubeConfig) {
+        # Copy and transform kubeconfig to use host.docker.internal
+        $content = Get-Content $hostKubeConfig -Raw
+        # Replace 127.0.0.1 with host.docker.internal and ensure TLS verify is handled
+        $content = $content -replace "https://127.0.0.1:", "https://host.docker.internal:"
+        
+        # Write to container /var/jenkins_home/.kube/config
+        $tmpKube = [System.IO.Path]::GetTempFileName()
+        Set-Content -Path $tmpKube -Value $content
+        docker cp $tmpKube "jenkins-devops:/var/jenkins_home/.kube/config"
+        Remove-Item $tmpKube -Force
+        
+        # Strip certificate-authority-data and add insecure-skip-tls-verify
+        docker exec jenkins-devops bash -c "sed -i '/certificate-authority-data/d' /var/jenkins_home/.kube/config && sed -i 's|server: https://host.docker.internal|server: https://host.docker.internal\n    insecure-skip-tls-verify: true|g' /var/jenkins_home/.kube/config"
+    }
+
+    $nodes = (docker exec jenkins-devops kubectl get nodes --no-headers 2>$null)
+    if ($nodes) {
+        Write-Success "Kubernetes connectivity confirmed: $nodes"
+    } else {
+        Write-Warn "Kubernetes cluster not reachable from inside container."
+    }
 } catch {
-    Write-Warn "kubectl verification inside container had an issue: $_"
+    Write-Warn "Kubernetes configuration had an issue: $_"
 }
 
 Write-Host "`n=======================================================" -ForegroundColor Green

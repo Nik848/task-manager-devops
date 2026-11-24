@@ -15,6 +15,10 @@ services:
     environment:
       - DOCKER_HOST=unix:///var/run/docker.sock
       - JAVA_OPTS=-Djenkins.install.runSetupWizard=true
+    # Grant supplementary membership in group 0 (root) so jenkins user can access /var/run/docker.sock
+    # without running as root, without chmod 666, and without privileged mode
+    group_add:
+      - "0"
     volumes:
       # Preserve Jenkins home and credentials
       - jenkins_home:/var/jenkins_home
