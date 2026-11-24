@@ -3,4 +3,5 @@
 Thank you for contributing to the Task Management System DevOps project.
 
 ## Development Workflow
-All contributors must follow the established branch and review process.
+All code contributions require at least one peer code review before approval.
+Automated Trivy vulnerability scans must show zero critical issues prior to integration.
