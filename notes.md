@@ -421,31 +421,40 @@ terraform destroy -auto-approve
 ### Why Prometheus & Grafana?
 Observability is critical in production DevOps environments. Phase 7 implements automated metric scraping, alerting capabilities, and real-time visualization:
 - **Prometheus**: Pulls time-series metrics every 10–15s from application endpoints and Kubernetes cluster infrastructure.
-- **Grafana**: Visualizes metrics across 7 real-time operational panels.
+- **kube-state-metrics**: Collects in-cluster object health, pod lifecycle state, and readiness metrics directly from the Kubernetes API.
+- **Grafana**: Visualizes metrics across 8 real-time operational panels.
 - **Metrics Server & cAdvisor**: Captures real-time CPU and memory usage across nodes, pods, and containers.
 
 ### Architecture & Isolation
 - **Namespace**: Dedicated `monitoring` namespace isolating monitoring infrastructure from application workloads.
 - **Backend Application Metrics**: Prometheus scrapes `backend-service.task-manager.svc.cluster.local:3000/metrics` capturing `http_requests_total`, `http_request_duration_seconds`, and Node.js process metrics (`process_cpu_seconds_total`, `process_resident_memory_bytes`, `nodejs_heap_size_used_bytes`).
+- **Pod Readiness Metrics**: `kube-state-metrics` (v2.12.0) runs under non-root UID 65534 with a minimal ClusterRole granting read access strictly to `pods` and `namespaces`. Scraped at `kube-state-metrics.monitoring.svc.cluster.local:8080/metrics`.
 - **Cluster & Container Metrics**: Kubelet cAdvisor scrapes provide `container_cpu_usage_seconds_total` and `container_memory_working_set_bytes`.
 - **Metrics Server**: Configured with `--kubelet-insecure-tls` for Docker Desktop, enabling `kubectl top nodes` and `kubectl top pods`.
-- **Security**: Both Prometheus (`UID 65534`) and Grafana (`UID 472`) run as non-root containers with strict resource requests and limits. No public LoadBalancers are exposed; access is mediated through `kubectl port-forward`.
+- **Security & Zero Leaked Secrets**:
+  - `monitoring/grafana/secret.yaml` was completely removed from version control.
+  - The deployment script (`monitoring/deploy.ps1`) enforces `$env:GRAFANA_ADMIN_PASSWORD` and halts immediately if unset or empty.
+  - The Secret (`grafana-secret`) is generated and applied dynamically at deploy-time via `kubectl create secret generic ... --dry-run=client -o yaml` without printing credentials.
+  - Both Prometheus (`UID 65534`), kube-state-metrics (`UID 65534`), and Grafana (`UID 472`) run as non-root containers with strict resource requests and limits. No public LoadBalancers are exposed; access is mediated through `kubectl port-forward`.
 
 ```text
 monitoring/
 ├── README.md                          # Full operations guide
 ├── namespace.yaml                     # monitoring namespace
 ├── metrics-server.yaml                # Metrics Server for kubectl top
-├── deploy.ps1                         # One-click deployment script
+├── deploy.ps1                         # Deployment script requiring $env:GRAFANA_ADMIN_PASSWORD
 ├── dashboards/
-│   └── dashboard-task-manager.json    # Grafana Dashboard JSON definition
+│   └── dashboard-task-manager.json    # Standalone Grafana Dashboard JSON definition
+├── kube-state-metrics/
+│   ├── rbac.yaml                      # ServiceAccount & ClusterRole (pods/namespaces read)
+│   ├── deployment.yaml                # kube-state-metrics Deployment (v2.12.0, non-root)
+│   └── service.yaml                   # ClusterIP Service (8080)
 ├── prometheus/
 │   ├── rbac.yaml                      # ServiceAccount & ClusterRole
-│   ├── configmap.yaml                 # Scrape configuration
+│   ├── configmap.yaml                 # Scrape configuration (backend, cAdvisor, ksm, prom)
 │   ├── deployment.yaml                # Prometheus Deployment
 │   └── service.yaml                   # ClusterIP Service (9090)
 └── grafana/
-    ├── secret.yaml                    # Credentials (admin / devops-monitoring-admin)
     ├── configmap-datasources.yaml     # Auto-provisioned Prometheus datasource
     ├── configmap-dashboards.yaml      # Dashboard provider
     ├── configmap-dashboard-json.yaml  # ConfigMap wrapping dashboard JSON
@@ -457,7 +466,7 @@ monitoring/
 ```bash
 # Grafana (Host Port 3001 -> Container Port 3000):
 kubectl port-forward svc/grafana-service 3001:3000 -n monitoring
-# URL: http://localhost:3001 (User: admin / Password: devops-monitoring-admin)
+# URL: http://localhost:3001 (User: admin / Password: configured in $env:GRAFANA_ADMIN_PASSWORD)
 
 # Prometheus (Host Port 9090 -> Container Port 9090):
 kubectl port-forward svc/prometheus-service 9090:9090 -n monitoring

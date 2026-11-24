@@ -52,3 +52,13 @@ data:
           - source_labels: [container]
             regex: "^$|POD"
             action: drop
+
+      # 4. Kube State Metrics (Pod Lifecycle, Status, and Readiness)
+      - job_name: "kube-state-metrics"
+        metrics_path: "/metrics"
+        scrape_interval: 10s
+        static_configs:
+          - targets: ["kube-state-metrics.monitoring.svc.cluster.local:8080"]
+            labels:
+              app: "kube-state-metrics"
+              service: "kube-state-metrics"

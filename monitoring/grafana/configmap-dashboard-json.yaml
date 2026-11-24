@@ -1,4 +1,4 @@
-apiVersion: v1
+﻿apiVersion: v1
 data:
   task-manager-overview.json: |
     {
@@ -35,7 +35,7 @@ data:
             },
             "overrides": []
           },
-          "gridPos": { "h": 5, "w": 8, "x": 0, "y": 1 },
+          "gridPos": { "h": 5, "w": 6, "x": 0, "y": 1 },
           "id": 1,
           "options": {
             "colorMode": "background",
@@ -51,12 +51,54 @@ data:
               "datasource": { "type": "prometheus", "uid": "Prometheus" },
               "editorMode": "code",
               "expr": "up{job=\"task-manager-backend\"}",
-              "legendFormat": "{{instance}}",
+              "legendFormat": "Scrape Target: {{service}}",
               "range": true,
               "refId": "A"
             }
           ],
-          "title": "Backend Pod Availability (Health)",
+          "title": "Backend Metrics Endpoint Scrape Status",
+          "type": "stat"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [
+                { "options": { "0": { "color": "red", "text": "NOT READY" }, "1": { "color": "green", "text": "READY" } }, "type": "value" }
+              ],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "green", "value": 1 }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": { "h": 5, "w": 6, "x": 6, "y": 1 },
+          "id": 8,
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "horizontal",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "10.4.0",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "Prometheus" },
+              "editorMode": "code",
+              "expr": "kube_pod_status_ready{namespace=\"task-manager\", condition=\"true\"}",
+              "legendFormat": "{{pod}}",
+              "range": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Application Pod Readiness (kube-state-metrics)",
           "type": "stat"
         },
         {
@@ -69,7 +111,7 @@ data:
             },
             "overrides": []
           },
-          "gridPos": { "h": 5, "w": 16, "x": 8, "y": 1 },
+          "gridPos": { "h": 5, "w": 12, "x": 12, "y": 1 },
           "id": 2,
           "options": {
             "legend": { "calcs": ["mean", "lastNotNull"], "displayMode": "table", "placement": "right", "showLegend": true },
@@ -280,7 +322,7 @@ data:
       "timezone": "browser",
       "title": "Task Management System — Operations Overview",
       "uid": "task-manager-overview",
-      "version": 1
+      "version": 2
     }
 kind: ConfigMap
 metadata:
