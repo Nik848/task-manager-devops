@@ -328,7 +328,7 @@ kubectl auth can-i delete namespaces --as=system:serviceaccount:task-manager:tas
 
 ## 11. Blue-Green Deployment (Phase 10)
 
-For zero-downtime release switching and instant rollback between `blue` (`v1.0.0` / `v1.0.1`) and `green` (`v2.0.0-green`) environments, see [BLUE-GREEN.md](./BLUE-GREEN.md) and use `k8s/blue-green.ps1`:
+`k8s/backend-service.yaml` and `k8s/frontend-service.yaml` default to `version: blue` so legacy unversioned deployments cannot accidentally receive traffic, and `k8s/deploy.ps1` preserves any active `version=blue|green` selector when rerun. For zero-downtime release switching, EndpointSlice validation, failed-switch auto-recovery, and instant rollback between `blue` (`v1.0.0` / `v1.0.1`) and `green` (`v2.0.0-green`), see [BLUE-GREEN.md](./BLUE-GREEN.md) and use `k8s/blue-green.ps1`:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\k8s\blue-green.ps1 -Action status

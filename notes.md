@@ -631,12 +631,12 @@ kubectl auth can-i get pods --as=system:serviceaccount:task-manager:default -n t
 
 ### Architecture & Traffic Switching
 Phase 10 implements zero-downtime **Blue-Green Deployment** on Kubernetes (`task-manager` namespace) using separate `blue` (`backend-blue`, `frontend-blue` on `v1.0.0` / `v1.0.1`) and `green` (`backend-green`, `frontend-green` on `v2.0.0-green`) Deployments:
-- **Service Selector Routing**: Existing `backend-service` (`ClusterIP :3000`) and `frontend-service` (`LoadBalancer :80`) route traffic exclusively to the active color by patching selectors (`app=backend,version=blue|green` and `app=frontend,version=blue|green`).
+- **Service Selector Routing & Safe Redeployment**: `k8s/backend-service.yaml` (`ClusterIP :3000`) and `k8s/frontend-service.yaml` (`LoadBalancer :80`) default to `version: blue` so legacy unversioned deployments cannot accidentally receive traffic. `k8s/deploy.ps1` preserves any active `version=blue|green` selector so rerunning standard deployment cannot reset an active Green environment.
 - **Shared Infrastructure**: Blue and Green reuse `task-manager-config`, `task-manager-secret`, `task-manager-pvc`, and the Supabase PostgreSQL database without duplicating secrets or storage.
 - **Controller Script (`k8s/blue-green.ps1`)**:
   - `status`: Displays Blue/Green pod readiness, images, and active Service selectors.
   - `deploy-blue` / `deploy-green`: Builds/deploys the environment and independently verifies Green (`/health` and `/`) via `kubectl port-forward` before any traffic switch.
-  - `switch-green` / `rollback-blue`: Enforces readiness safety gates (aborts if target deployments are missing or not Ready), switches selectors, verifies endpoints, and validates `http://localhost/health` and `http://localhost/`.
+  - `switch-green` / `rollback-blue`: Records previous selectors, enforces readiness gates, updates selectors with exit-code checks, verifies `EndpointSlices` converge exclusively to the target color, and validates `http://localhost/health` and `http://localhost/`. If any update or verification step fails, it automatically restores both previous selectors and reports rollback status.
 
 ### Shared Database & Environment Limitations
 - **Database Compatibility**: Blue and Green share the same Supabase PostgreSQL instance. Never run concurrent migrations across Blue and Green; schema changes must remain backward-compatible during the cutover/rollback window.

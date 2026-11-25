@@ -114,11 +114,21 @@ Write-Step "Applying RBAC resources"
 kubectl apply -f "$PSScriptRoot/rbac.yaml"
 Write-Success "RBAC resources applied."
 
-# 7. Apply Services
+# 7. Apply Services (preserve active Blue-Green selector if already set)
 Write-Step "Applying Services (Backend ClusterIP & Frontend LoadBalancer)"
-kubectl apply -f "$PSScriptRoot/backend-service.yaml"
-kubectl apply -f "$PSScriptRoot/frontend-service.yaml"
-Write-Success "Services applied."
+$beVer = (kubectl get service backend-service -n $Namespace --ignore-not-found -o jsonpath="{.spec.selector.version}")
+if ([string]::IsNullOrWhiteSpace($beVer)) {
+    kubectl apply -f "$PSScriptRoot/backend-service.yaml"
+} else {
+    Write-Host "Preserving active Blue-Green selector (version=$beVer) on backend-service." -ForegroundColor Gray
+}
+$feVer = (kubectl get service frontend-service -n $Namespace --ignore-not-found -o jsonpath="{.spec.selector.version}")
+if ([string]::IsNullOrWhiteSpace($feVer)) {
+    kubectl apply -f "$PSScriptRoot/frontend-service.yaml"
+} else {
+    Write-Host "Preserving active Blue-Green selector (version=$feVer) on frontend-service." -ForegroundColor Gray
+}
+Write-Success "Services configured."
 
 # 8. Apply Ingress (if available)
 if (-not $SkipIngress) {

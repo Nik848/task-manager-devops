@@ -93,11 +93,18 @@ powershell -ExecutionPolicy Bypass -File .\k8s\blue-green.ps1 -Action rollback-b
 
 ---
 
-## 4. Safety Controls & Shared Database Considerations
+## 4. Safety Controls, Endpoint Validation & Failed-Switch Recovery
 
-1. **Failure Safety**: `switch-green` and `rollback-blue` refuse to switch traffic if the target deployments are missing or not Ready (`readyReplicas != replicas`), leaving the active environment untouched.
-2. **Non-Destructive Switching**: Switching to Green does **not** delete Blue, enabling instant selector-based rollback.
-3. **Shared Supabase Database**:
+1. **Consistent Service Selectors & Safe Redeployment**:
+   - `k8s/backend-service.yaml` and `k8s/frontend-service.yaml` define `version: blue` as the safe initial selector so legacy unversioned `backend`/`frontend` Deployments cannot accidentally receive traffic during Blue-Green operation.
+   - `k8s/deploy.ps1` inspects existing Service `spec.selector.version` values before applying Services and preserves any active Blue-Green selector (e.g., `version=green`), preventing standard redeployments from resetting active production traffic.
+2. **Pre-Switch Readiness Gate**: `switch-green` and `rollback-blue` refuse to switch traffic if the target deployments are missing or not Ready (`readyReplicas != replicas`).
+3. **EndpointSlice Convergence & Failed-Switch Recovery**:
+   - `Switch-TrafficTo` records the previous Service selectors before making changes.
+   - After updating both Service selectors (`kubectl set selector` with exit-code checks), it polls `discovery.k8s.io/v1` `EndpointSlices` to confirm **all** ready backend and frontend endpoints belong exclusively to the requested color (`backend-<color>-*`, `frontend-<color>-*`), then runs production `http://localhost/health` and `http://localhost/` checks.
+   - If any update, endpoint convergence, or health check fails, `Switch-TrafficTo` automatically restores both previous selectors, verifies production health, and reports whether the failed-switch rollback succeeded.
+4. **Non-Destructive Switching**: Switching to Green does **not** delete Blue, enabling instant selector-based rollback.
+5. **Shared Supabase Database**:
    - Both Blue and Green share `task-manager-secret` (`DATABASE_URL`) and the same live Supabase PostgreSQL database.
    - Do **not** run two database migration jobs simultaneously across Blue and Green.
    - Any schema changes introduced by Green **must remain backward-compatible** with Blue (expand-and-contract pattern) during the deployment and rollback window.

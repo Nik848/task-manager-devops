@@ -15,7 +15,8 @@ param(
     [string]$Action,
 
     [string]$Namespace = "task-manager",
-    [switch]$SkipBuild = $false
+    [switch]$SkipBuild = $false,
+    [switch]$SimulateFailure = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -108,22 +109,99 @@ function Verify-ProductionEntrypoint {
     Write-Ok "Production frontend HTTP: $($feResp.StatusCode)"
 }
 
+function Get-ServiceSelectorMap {
+    param([string]$ServiceName)
+    $raw = kubectl get service $ServiceName -n $Namespace -o json
+    if ($LASTEXITCODE -ne 0) { throw "Failed to read service '$ServiceName'." }
+    $obj = $raw | ConvertFrom-Json
+    $pairs = @()
+    foreach ($prop in $obj.spec.selector.PSObject.Properties) {
+        $pairs += "$($prop.Name)=$($prop.Value)"
+    }
+    return ($pairs -join ",")
+}
+
+function Wait-EndpointsForColor {
+    param(
+        [string]$ServiceName,
+        [string]$ExpectedPodPrefix,
+        [int]$TimeoutSeconds = 20
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $raw = kubectl get endpointslices -l "kubernetes.io/service-name=$ServiceName" -n $Namespace -o json
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($raw)) {
+            $list = $raw | ConvertFrom-Json
+            $readyTargets = @()
+            foreach ($slice in $list.items) {
+                if ($slice.endpoints) {
+                    foreach ($ep in $slice.endpoints) {
+                        if ($ep.conditions.ready -eq $true) {
+                            $readyTargets += $ep
+                        }
+                    }
+                }
+            }
+            if ($readyTargets.Count -gt 0) {
+                $invalid = @($readyTargets | Where-Object { -not $_.targetRef -or ($_.targetRef.name -notlike "$ExpectedPodPrefix*") })
+                if ($invalid.Count -eq 0) {
+                    return $readyTargets
+                }
+            }
+        }
+        Start-Sleep -Seconds 1
+    }
+    throw "EndpointSlices for '$ServiceName' did not converge exclusively to '$ExpectedPodPrefix*' within ${TimeoutSeconds}s."
+}
+
 function Switch-TrafficTo {
-    param([string]$Color)
+    param(
+        [string]$Color,
+        [switch]$SimulatePostSwitchFailure = $false
+    )
     Assert-ColorReady $Color
 
-    Write-Info "Switching backend-service and frontend-service selectors to version=$Color..."
-    kubectl set selector service backend-service "app=backend,version=$Color" -n $Namespace | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Failed to update backend-service selector." }
-    kubectl set selector service frontend-service "app=frontend,version=$Color" -n $Namespace | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Failed to update frontend-service selector." }
+    $prevBeSelector = Get-ServiceSelectorMap "backend-service"
+    $prevFeSelector = Get-ServiceSelectorMap "frontend-service"
+    Write-Info "Recorded previous selectors -> backend-service: [$prevBeSelector], frontend-service: [$prevFeSelector]"
 
-    Start-Sleep -Seconds 2
-    Write-Info "Verifying Service endpoints point to '$Color' pods..."
-    kubectl get endpoints backend-service frontend-service -n $Namespace
-    kubectl get pods -n $Namespace -l "version=$Color" -o wide
-    Verify-ProductionEntrypoint
-    Write-Ok "Active production traffic is now routed to: $Color"
+    try {
+        Write-Info "Switching backend-service and frontend-service selectors to version=$Color..."
+        kubectl set selector service backend-service "app=backend,version=$Color" -n $Namespace | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Failed to update backend-service selector." }
+        kubectl set selector service frontend-service "app=frontend,version=$Color" -n $Namespace | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Failed to update frontend-service selector." }
+
+        Write-Info "Waiting for Service endpoints to converge to '$Color' pods..."
+        $beAddrs = Wait-EndpointsForColor -ServiceName "backend-service" -ExpectedPodPrefix "backend-$Color-"
+        $feAddrs = Wait-EndpointsForColor -ServiceName "frontend-service" -ExpectedPodPrefix "frontend-$Color-"
+        Write-Ok "Verified backend-service endpoints ($($beAddrs.Count)): $(($beAddrs | ForEach-Object { $_.targetRef.name }) -join ', ')"
+        Write-Ok "Verified frontend-service endpoints ($($feAddrs.Count)): $(($feAddrs | ForEach-Object { $_.targetRef.name }) -join ', ')"
+
+        if ($SimulatePostSwitchFailure) {
+            throw "Simulated post-switch verification failure triggered for testing."
+        }
+
+        Verify-ProductionEntrypoint
+        kubectl get endpointslices -l "kubernetes.io/service-name in (backend-service,frontend-service)" -n $Namespace
+        Write-Ok "Active production traffic is now routed to: $Color"
+    } catch {
+        $errMsg = $_.Exception.Message
+        Write-Fail "Traffic switch to '$Color' failed: $errMsg"
+        Write-Info "Attempting automatic restoration of previous selectors..."
+        try {
+            kubectl set selector service backend-service $prevBeSelector -n $Namespace | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Failed to restore backend-service selector." }
+            kubectl set selector service frontend-service $prevFeSelector -n $Namespace | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Failed to restore frontend-service selector." }
+            Start-Sleep -Seconds 2
+            Verify-ProductionEntrypoint
+            Write-Ok "Failed-switch rollback succeeded: restored backend-service [$prevBeSelector] and frontend-service [$prevFeSelector]."
+        } catch {
+            Write-Fail "Automatic restoration of previous selectors failed: $($_.Exception.Message)"
+        }
+        throw $errMsg
+    }
 }
 
 switch ($Action) {
@@ -170,7 +248,7 @@ switch ($Action) {
     }
 
     "switch-green" {
-        Switch-TrafficTo "green"
+        Switch-TrafficTo "green" -SimulatePostSwitchFailure:$SimulateFailure
     }
 
     "rollback-blue" {
