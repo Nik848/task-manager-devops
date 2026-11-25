@@ -25,7 +25,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: fluentd
-          image: fluent/fluentd-kubernetes-daemonset:v1.17-debian-forward-1
+          image: fluentd-loki:v1.17-1
           imagePullPolicy: IfNotPresent
           env:
             - name: FLUENTD_CONF
