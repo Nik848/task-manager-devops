@@ -1,0 +1,116 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluentd-config
+  namespace: logging
+  labels:
+    app.kubernetes.io/name: fluentd
+    app.kubernetes.io/part-of: task-manager-system
+data:
+  fluent.conf: |
+    # ---------------------------------------------------------------------------
+    # 1. Input: Tail Kubernetes container logs on the node (CRI / containerd)
+    # ---------------------------------------------------------------------------
+    <source>
+      @type tail
+      @id in_tail_container_logs
+      path /var/log/containers/*.log
+      # Avoid collecting Fluentd's own logs recursively
+      exclude_path ["/var/log/containers/fluentd*.log", "/var/log/containers/*_logging_fluentd-*.log"]
+      pos_file /fluentd/state/fluentd-containers.log.pos
+      tag kubernetes.*
+      read_from_head true
+      <parse>
+        @type regexp
+        expression /^(?<time>.+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<message>.*)$/
+        time_format %Y-%m-%dT%H:%M:%S.%N%:z
+      </parse>
+    </source>
+
+    # ---------------------------------------------------------------------------
+    # 2. Enrich all logs with Kubernetes metadata (namespace, pod, container, labels)
+    # ---------------------------------------------------------------------------
+    <filter kubernetes.**>
+      @type kubernetes_metadata
+      @id filter_kube_metadata
+      skip_labels false
+      skip_container_metadata false
+      skip_master_url false
+      skip_namespace_metadata false
+    </filter>
+
+    # ---------------------------------------------------------------------------
+    # 3. Parse JSON application logs (Pino) in the task-manager namespace
+    #    Non-JSON logs (e.g., Nginx access logs) are preserved safely as raw message
+    # ---------------------------------------------------------------------------
+    <filter kubernetes.var.log.containers.*_task-manager_*.log>
+      @type parser
+      @id filter_parse_app_json
+      key_name message
+      reserve_data true
+      reserve_time true
+      remove_key_name_field false
+      emit_invalid_record_to_error false
+      <parse>
+        @type json
+      </parse>
+    </filter>
+
+    # ---------------------------------------------------------------------------
+    # 4. Separate Application vs Infrastructure logs with explicit log_category
+    # ---------------------------------------------------------------------------
+    <filter kubernetes.var.log.containers.*_task-manager_*.log>
+      @type record_transformer
+      @id filter_tag_application
+      <record>
+        log_category "application"
+      </record>
+    </filter>
+
+    <filter kubernetes.**>
+      @type record_transformer
+      @id filter_tag_infrastructure
+      enable_ruby true
+      <record>
+        log_category ${record["log_category"] || "infrastructure"}
+      </record>
+    </filter>
+
+    # ---------------------------------------------------------------------------
+    # 5. Output: Centralized local storage separated by application vs infrastructure
+    # ---------------------------------------------------------------------------
+    <match kubernetes.var.log.containers.*_task-manager_*.log>
+      @type file
+      @id out_file_application
+      path /var/log/fluentd-central/application/app
+      append true
+      <format>
+        @type json
+      </format>
+      <buffer time>
+        @type file
+        path /fluentd/state/buffer-application
+        timekey 1d
+        timekey_wait 5s
+        flush_mode interval
+        flush_interval 5s
+      </buffer>
+    </match>
+
+    <match kubernetes.**>
+      @type file
+      @id out_file_infrastructure
+      path /var/log/fluentd-central/infrastructure/infra
+      append true
+      <format>
+        @type json
+      </format>
+      <buffer time>
+        @type file
+        path /fluentd/state/buffer-infrastructure
+        timekey 1d
+        timekey_wait 5s
+        flush_mode interval
+        flush_interval 5s
+      </buffer>
+    </match>

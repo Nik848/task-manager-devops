@@ -540,6 +540,56 @@ powershell -ExecutionPolicy Bypass -File .\jenkins\setup-jenkins.ps1
 | **CI/CD** | Production 5-stage declarative `Jenkinsfile` with automated build, test, packaging, and SCM push trigger. |
 | **Ansible Automation** | 4 production playbooks for Docker, Kubernetes, Application Deployment, and Config Management running from WSL2. |
 | **Terraform IaC** | Modular Infrastructure as Code (`kreuzwerker/docker` ~> 3.0.2) with reusable container module, outputs, and isolated stack. |
-| **Monitoring (Prometheus & Grafana)** | Complete monitoring stack with auto-provisioned Prometheus, Grafana 7-panel dashboard, Metrics Server, and cAdvisor. |
-| **Automation** | One-click PowerShell deployment scripts for Kubernetes (`deploy.ps1`), Jenkins (`setup-jenkins.ps1`), and Monitoring (`deploy.ps1`). |
+| **Monitoring (Prometheus & Grafana)** | Complete monitoring stack with auto-provisioned Prometheus, Grafana 8-panel dashboard, Metrics Server, and cAdvisor. |
+| **Centralized Logging (Fluentd)** | Lightweight Fluentd DaemonSet collecting application (Pino JSON), container, and Kubernetes logs with metadata enrichment. |
+| **Automation** | One-click PowerShell deployment scripts for Kubernetes (`deploy.ps1`), Jenkins (`setup-jenkins.ps1`), Monitoring (`deploy.ps1`), and Logging (`deploy.ps1`). |
 | **Git & Versioning**| Clean, sanitized repository pushed to GitHub on branch **`develop`** without secret leaks. |
+
+---
+
+## 12. Centralized Logging with Fluentd (Phase 8)
+
+### Logging Architecture
+Phase 8 implements lightweight centralized log collection on Docker Desktop Kubernetes using a **Fluentd DaemonSet** (`fluent/fluentd-kubernetes-daemonset:v1.17-debian-forward-1`) deployed in the isolated `logging` namespace:
+- **Log Collection Sources**: Tails container `stdout`/`stderr` logs from `/var/log/containers/*.log` (which resolve to `/var/log/pods/...` under containerd CRI format), while explicitly excluding Fluentd's own logs (`exclude_path`) to prevent recursive loops.
+- **Metadata Enrichment**: Uses `fluent-plugin-kubernetes_metadata_filter` with a read-only ServiceAccount (`pods`, `namespaces` only—no `secrets` access) to attach `namespace_name`, `pod_name`, `container_name`, and pod/namespace labels.
+- **JSON Parsing & Separation**:
+  - **Application Logs (`task-manager` namespace)**: Parses structured Pino JSON logs (`@type parser` with `reserve_time true`) while gracefully preserving plain-text Nginx logs from `frontend`. Tagged with `log_category: "application"`.
+  - **Infrastructure Logs (other namespaces)**: `kube-system`, `monitoring`, and control-plane logs are tagged with `log_category: "infrastructure"`.
+
+### Fluentd Components (`logging/`)
+```text
+logging/
+├── README.md          # Full operations, storage, and verification manual
+├── namespace.yaml     # Dedicated 'logging' namespace
+├── rbac.yaml          # ServiceAccount + read-only ClusterRole (pods, namespaces)
+├── configmap.yaml     # Fluentd fluent.conf pipeline definition
+├── daemonset.yaml     # Fluentd DaemonSet (resource limits, tolerations, hostPath mounts)
+└── deploy.ps1         # One-click Windows PowerShell deployment script
+```
+
+### Storage, Retention & Limitations
+- **Centralized Local Storage**: Logs are written as daily time-sliced JSON files (`timekey 1d`, `flush_interval 5s`) to `/var/log/fluentd-central/` backed by a node `hostPath` volume:
+  - Application logs: `/var/log/fluentd-central/application/app.YYYYMMDD.log`
+  - Infrastructure logs: `/var/log/fluentd-central/infrastructure/infra.YYYYMMDD.log`
+- **Retention**: Files flush every 5 seconds into daily files; no automatic age-based purging is configured.
+- **Persistence & Limitations**:
+  - Logs written to `/var/log/fluentd-central` persist across Fluentd pod restarts on the same node, though `pos_file` (`emptyDir`) resets on pod recreation.
+  - Because `hostPath` is node-local to Docker Desktop (`desktop-control-plane`), logs do not replicate across multi-node clusters and are lost if the cluster/VM is reset.
+  - `/var/log/pods` on Docker Desktop is `0750` owned by `root:root`, so Fluentd runs with `allowPrivilegeEscalation: false` and UID `0` to read host CRI logs; no LoadBalancer or NodePort is exposed.
+
+### Deployment & Verification Commands
+```powershell
+# Deploy Fluentd logging stack
+powershell -ExecutionPolicy Bypass -File .\logging\deploy.ps1
+
+# Check DaemonSet and Pod health
+kubectl get ds,pods,svc -n logging
+
+# Validate Fluentd configuration syntax
+kubectl exec -n logging ds/fluentd -- fluentd --dry-run -c /fluentd/etc/fluent.conf
+
+# Inspect collected application and infrastructure logs
+kubectl exec -n logging ds/fluentd -- sh -c "grep 'request completed' /var/log/fluentd-central/application/app.20261125.log | tail -n 2"
+kubectl exec -n logging ds/fluentd -- sh -c "grep 'kube-system' /var/log/fluentd-central/infrastructure/infra.20261125.log | tail -n 2"
+```
