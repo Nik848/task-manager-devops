@@ -92,8 +92,9 @@ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.pas
   - `syncPolicy.automated`: `prune: true`, `selfHeal: true`
   - `syncOptions`: `CreateNamespace=true`, `RespectIgnoreDifferences=true`, `ServerSideApply=true`
 
-### Ownership Boundaries & Blue-Green Compatibility
+### Ownership Boundaries & Blue-Green / Ansible Compatibility
 - **ArgoCD Owns**: `ConfigMap/task-manager-config`, `ServiceAccount/Role/RoleBinding`, `Deployment/backend-blue`, `Deployment/frontend-blue`, `Deployment/backend-green`, `Deployment/frontend-green`, and `Service` base definitions (ports/type/labels).
+- **Ansible Integration**: When `task-manager-gitops` is present in `argocd`, `ansible/playbooks/configure_application.yml` and `ansible/playbooks/deploy_application.yml` defer ConfigMap ownership to ArgoCD (requiring edits in `gitops/manifests/configmap.yaml` on `develop`) and preserve any active Blue-Green `spec.selector.version` (`blue` or `green`) on `backend-service` and `frontend-service`. When GitOps is not installed, Ansible remains usable independently.
 - **Protected Outside GitOps**:
   - `Secret/task-manager-secret`: Excluded from `gitops/`; provisioned via `k8s/deploy.ps1` from local `.env` so real credentials are never committed or overwritten.
   - `PV/task-manager-pv` & `PVC/task-manager-pvc`: Excluded from `gitops/` so automated `prune: true` can never delete persistent storage.

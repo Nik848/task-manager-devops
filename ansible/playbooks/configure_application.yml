@@ -29,7 +29,27 @@
         kubectl {{ context_flag }} get namespace {{ k8s_namespace }}
       changed_when: false
 
-    - name: 3. Apply non-sensitive ConfigMap from Ansible single source of truth
+    - name: 2b. Detect whether ArgoCD Application task-manager-gitops manages GitOps config
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} get application task-manager-gitops -n argocd --ignore-not-found -o jsonpath='{.metadata.name}'
+      register: argocd_app_check
+      changed_when: false
+      failed_when: false
+
+    - name: Set GitOps ownership fact
+      ansible.builtin.set_fact:
+        gitops_active: "{{ (argocd_app_check.stdout | default('') | trim) == 'task-manager-gitops' }}"
+
+    - name: Inform operator when ArgoCD is authoritative owner of task-manager-config
+      ansible.builtin.debug:
+        msg: >-
+          ArgoCD Application 'task-manager-gitops' is active in namespace 'argocd' and is the
+          authoritative owner of 'task-manager-config'. Skipping Ansible ConfigMap overwrite
+          and legacy backend rollout. Make configuration changes in 'gitops/manifests/configmap.yaml'
+          and commit to branch 'develop'.
+      when: gitops_active
+
+    - name: 3. Apply non-sensitive ConfigMap from Ansible single source of truth (non-GitOps only)
       ansible.builtin.shell: |
         cat <<EOF | kubectl {{ context_flag }} apply -f -
         apiVersion: v1
@@ -50,21 +70,26 @@
         EOF
       register: cm_apply_output
       changed_when: "'configured' in cm_apply_output.stdout or 'created' in cm_apply_output.stdout"
+      when: not gitops_active
 
     - name: 4. Trigger controlled backend rollout ONLY when ConfigMap changed
       ansible.builtin.command: >-
         kubectl {{ context_flag }} rollout restart deployment/backend -n {{ k8s_namespace }}
-      when: cm_apply_output.changed
+      when:
+        - not gitops_active
+        - cm_apply_output.changed | default(false)
       register: backend_restart_out
 
     - name: 5. Wait for backend rollout completion if configuration changed
       ansible.builtin.command: >-
         kubectl {{ context_flag }} rollout status deployment/backend -n {{ k8s_namespace }} --timeout=120s
-      when: cm_apply_output.changed
+      when:
+        - not gitops_active
+        - cm_apply_output.changed | default(false)
 
     - name: 6. Verify backend deployment availability
       ansible.builtin.command: >-
-        kubectl {{ context_flag }} get deployment backend -n {{ k8s_namespace }}
+        kubectl {{ context_flag }} get deployments -n {{ k8s_namespace }} -l app=backend
       register: backend_avail
       changed_when: false
 
@@ -88,8 +113,8 @@
     - name: Display Configuration Management Verification Summary
       ansible.builtin.debug:
         msg:
-          - "ConfigMap Status: {{ cm_apply_output.stdout | trim }}"
-          - "Rollout Triggered: {{ cm_apply_output.changed }}"
+          - "GitOps Active (ArgoCD): {{ gitops_active }}"
+          - "ConfigMap Status: {{ gitops_active | ternary('Managed by ArgoCD (task-manager-gitops) - skipped Ansible overwrite', (cm_apply_output.stdout | default('') | trim)) }}"
+          - "Rollout Triggered: {{ (not gitops_active) and (cm_apply_output.changed | default(false)) }}"
           - "Secret Preserved: {{ (secret_verify.stdout != '') | ternary('task-manager-secret (present and untouched)', 'missing') }}"
-          - "Configured CORS Origins: {{ app_cors_origin }}"
           - "Configured Environment: {{ app_node_env }}"

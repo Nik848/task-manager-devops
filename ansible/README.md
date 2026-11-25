@@ -95,18 +95,18 @@ ansible-playbook -i inventory/hosts.ini --syntax-check playbooks/deploy_applicat
 ansible-playbook -i inventory/hosts.ini --syntax-check playbooks/configure_application.yml
 ```
 
-### 2. Execute Configuration Management (Single Source of Truth)
+### 2. Execute Configuration Management (Non-GitOps Fallback vs. ArgoCD Ownership)
 ```bash
 ansible-playbook -i inventory/hosts.ini playbooks/configure_application.yml
 ```
-*Verification of Conditional Rollout*:
-- When ConfigMap values are updated in `group_vars/all.yml`: ConfigMap reports `changed=1`, triggering `kubectl rollout restart deployment/backend`.
-- When ConfigMap values are identical (idempotent run): ConfigMap reports `changed=0`, and the rollout restart task is skipped (`skipped=1`).
+- **When ArgoCD GitOps is Active (`task-manager-gitops` exists in `argocd`)**: ArgoCD is the authoritative owner of `task-manager-config`. Both `configure_application.yml` and `deploy_application.yml` automatically detect `task-manager-gitops`, skip overwriting `task-manager-config` (no legacy backend rollout triggered), and instruct operators to commit configuration updates in `gitops/manifests/configmap.yaml` on `develop`.
+- **When GitOps is Not Installed**: Ansible retains full Phase 5 ConfigMap management (`group_vars/all.yml` as single source of truth), triggering `kubectl rollout restart deployment/backend` only when ConfigMap values change (`changed=1`).
 
-### 3. Execute Application Deployment
+### 3. Execute Application Deployment (Blue-Green Safe)
 ```bash
 ansible-playbook -i inventory/hosts.ini playbooks/deploy_application.yml
 ```
+- Before applying `backend-service.yaml` or `frontend-service.yaml`, `deploy_application.yml` inspects `spec.selector.version` and preserves any active Blue-Green selector (`blue` or `green`), preventing accidental traffic resets.
 
 ### 4. Dry-Run / Check Mode
 ```bash

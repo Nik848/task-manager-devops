@@ -49,7 +49,26 @@
       register: rbac_out
       changed_when: "'configured' in rbac_out.stdout or 'created' in rbac_out.stdout"
 
-    - name: 5. Apply non-sensitive ConfigMap from Ansible single source of truth
+    - name: 4b. Detect whether ArgoCD Application task-manager-gitops manages GitOps config
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} get application task-manager-gitops -n argocd --ignore-not-found -o jsonpath='{.metadata.name}'
+      register: argocd_app_check
+      changed_when: false
+      failed_when: false
+
+    - name: Set GitOps ownership fact
+      ansible.builtin.set_fact:
+        gitops_active: "{{ (argocd_app_check.stdout | default('') | trim) == 'task-manager-gitops' }}"
+
+    - name: Inform operator when ArgoCD owns task-manager-config
+      ansible.builtin.debug:
+        msg: >-
+          ArgoCD Application 'task-manager-gitops' is active in namespace 'argocd'.
+          Skipping Ansible ConfigMap apply and legacy backend rollout restart; edit
+          'gitops/manifests/configmap.yaml' on branch 'develop' for configuration changes.
+      when: gitops_active
+
+    - name: 5. Apply non-sensitive ConfigMap from Ansible single source of truth (non-GitOps only)
       ansible.builtin.shell: |
         cat <<EOF | kubectl {{ context_flag }} apply -f -
         apiVersion: v1
@@ -70,19 +89,23 @@
         EOF
       register: cm_out
       changed_when: "'configured' in cm_out.stdout or 'created' in cm_out.stdout"
+      when: not gitops_active
 
     - name: 6. Check if Backend deployment exists for rollout restart
       ansible.builtin.command: >-
         kubectl {{ context_flag }} get deployment backend -n {{ k8s_namespace }} --ignore-not-found -o jsonpath='{.metadata.name}'
       register: backend_dep_check
-      when: cm_out.changed
+      when:
+        - not gitops_active
+        - cm_out.changed | default(false)
       changed_when: false
 
     - name: 7. Restart Backend deployment after ConfigMap change
       ansible.builtin.command: >-
         kubectl {{ context_flag }} rollout restart deployment/backend -n {{ k8s_namespace }}
       when:
-        - cm_out.changed
+        - not gitops_active
+        - cm_out.changed | default(false)
         - backend_dep_check.stdout is defined
         - backend_dep_check.stdout == 'backend'
 
@@ -90,7 +113,8 @@
       ansible.builtin.command: >-
         kubectl {{ context_flag }} rollout status deployment/backend -n {{ k8s_namespace }} --timeout=120s
       when:
-        - cm_out.changed
+        - not gitops_active
+        - cm_out.changed | default(false)
         - backend_dep_check.stdout is defined
         - backend_dep_check.stdout == 'backend'
 
@@ -112,14 +136,41 @@
               -n {{ k8s_namespace }}
       when: secret_check.stdout == ''
 
-    - name: 11. Apply Backend and Frontend Services
+    - name: 11a. Inspect existing backend-service Blue-Green selector
       ansible.builtin.command: >-
-        kubectl {{ context_flag }} apply -f {{ item }}
-      loop:
-        - "{{ manifests }}/backend-service.yaml"
-        - "{{ manifests }}/frontend-service.yaml"
-      register: svc_out
-      changed_when: "'configured' in svc_out.stdout or 'created' in svc_out.stdout"
+        kubectl {{ context_flag }} get service backend-service -n {{ k8s_namespace }} --ignore-not-found -o jsonpath='{.spec.selector.version}'
+      register: be_svc_ver
+      changed_when: false
+
+    - name: 11b. Inspect existing frontend-service Blue-Green selector
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} get service frontend-service -n {{ k8s_namespace }} --ignore-not-found -o jsonpath='{.spec.selector.version}'
+      register: fe_svc_ver
+      changed_when: false
+
+    - name: 11c. Preserve active Blue-Green selector on backend-service
+      ansible.builtin.debug:
+        msg: "Preserving active Blue-Green selector (version={{ be_svc_ver.stdout | trim }}) on backend-service."
+      when: (be_svc_ver.stdout | default('') | trim) in ['blue', 'green']
+
+    - name: 11d. Apply backend-service manifest only when no active Blue-Green selector is set
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} apply -f {{ manifests }}/backend-service.yaml
+      register: be_svc_out
+      changed_when: "'configured' in be_svc_out.stdout or 'created' in be_svc_out.stdout"
+      when: (be_svc_ver.stdout | default('') | trim) not in ['blue', 'green']
+
+    - name: 11e. Preserve active Blue-Green selector on frontend-service
+      ansible.builtin.debug:
+        msg: "Preserving active Blue-Green selector (version={{ fe_svc_ver.stdout | trim }}) on frontend-service."
+      when: (fe_svc_ver.stdout | default('') | trim) in ['blue', 'green']
+
+    - name: 11f. Apply frontend-service manifest only when no active Blue-Green selector is set
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} apply -f {{ manifests }}/frontend-service.yaml
+      register: fe_svc_out
+      changed_when: "'configured' in fe_svc_out.stdout or 'created' in fe_svc_out.stdout"
+      when: (fe_svc_ver.stdout | default('') | trim) not in ['blue', 'green']
 
     - name: 12. Apply Ingress manifest
       ansible.builtin.command: >-
@@ -161,8 +212,9 @@
     - name: Application Deployment Summary
       ansible.builtin.debug:
         msg:
+          - "GitOps Active (ArgoCD): {{ gitops_active }}"
           - "Pods Status:"
           - "{{ pods_status.stdout_lines }}"
           - "Services Status:"
           - "{{ svc_status.stdout_lines }}"
-          - "ConfigMap Rollout Triggered: {{ cm_out.changed }}"
+          - "ConfigMap Rollout Triggered: {{ (not gitops_active) and (cm_out.changed | default(false)) }}"
