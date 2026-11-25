@@ -58,11 +58,11 @@ if (-not [string]::IsNullOrEmpty($secretExists)) {
 } elseif (Test-Path $backendEnvPath) {
     Write-Host "Found local app/backend/.env - extracting credentials for task-manager-secret..." -ForegroundColor Gray
     
-    # Extract values from .env
+    # Extract values from .env (no hardcoded defaults for any secret or admin credential)
     $dbUrl = ""
     $jwtSecret = ""
-    $adminEmail = "admin@example.com"
-    $adminPass = "changeme123"
+    $adminEmail = ""
+    $adminPass = ""
 
     Get-Content $backendEnvPath | ForEach-Object {
         $line = $_.Trim()
@@ -81,22 +81,26 @@ if (-not [string]::IsNullOrEmpty($secretExists)) {
         }
     }
 
-    if ($dbUrl -and $jwtSecret) {
+    $missingKeys = @()
+    if ([string]::IsNullOrWhiteSpace($dbUrl)) { $missingKeys += "DATABASE_URL" }
+    if ([string]::IsNullOrWhiteSpace($jwtSecret)) { $missingKeys += "JWT_SECRET" }
+    if ([string]::IsNullOrWhiteSpace($adminEmail)) { $missingKeys += "ADMIN_EMAIL" }
+    if ([string]::IsNullOrWhiteSpace($adminPass)) { $missingKeys += "ADMIN_PASSWORD" }
+
+    if ($missingKeys.Count -eq 0) {
         kubectl create secret generic task-manager-secret `
             --namespace=$Namespace `
             --from-literal="DATABASE_URL=$dbUrl" `
             --from-literal="JWT_SECRET=$jwtSecret" `
             --from-literal="ADMIN_EMAIL=$adminEmail" `
             --from-literal="ADMIN_PASSWORD=$adminPass" `
-            --dry-run=client -o yaml | kubectl apply -f -
+            --dry-run=client -o yaml | kubectl apply -f - | Out-Null
         Write-Success "Created 'task-manager-secret' from app/backend/.env"
     } else {
-        Write-Warn "Incomplete credentials in .env. Applying k8s/secret.yaml placeholder template."
-        kubectl apply -f "$PSScriptRoot/secret.yaml"
+        throw "Missing or empty required credentials in app/backend/.env: $($missingKeys -join ', '). Deployment halted to avoid provisioning incomplete or default credentials."
     }
 } else {
-    Write-Warn "No .env found. Applying k8s/secret.yaml. Remember to update placeholders with actual Supabase credentials!"
-    kubectl apply -f "$PSScriptRoot/secret.yaml"
+    throw "Secret 'task-manager-secret' does not exist in namespace '$Namespace' and app/backend/.env was not found. Provision the Secret securely before deploying."
 }
 
 # 5. Apply Persistent Volume & Persistent Volume Claim
@@ -110,11 +114,21 @@ Write-Step "Applying RBAC resources"
 kubectl apply -f "$PSScriptRoot/rbac.yaml"
 Write-Success "RBAC resources applied."
 
-# 7. Apply Services
+# 7. Apply Services (preserve active Blue-Green selector if already set)
 Write-Step "Applying Services (Backend ClusterIP & Frontend LoadBalancer)"
-kubectl apply -f "$PSScriptRoot/backend-service.yaml"
-kubectl apply -f "$PSScriptRoot/frontend-service.yaml"
-Write-Success "Services applied."
+$beVer = (kubectl get service backend-service -n $Namespace --ignore-not-found -o jsonpath="{.spec.selector.version}")
+if ([string]::IsNullOrWhiteSpace($beVer)) {
+    kubectl apply -f "$PSScriptRoot/backend-service.yaml"
+} else {
+    Write-Host "Preserving active Blue-Green selector (version=$beVer) on backend-service." -ForegroundColor Gray
+}
+$feVer = (kubectl get service frontend-service -n $Namespace --ignore-not-found -o jsonpath="{.spec.selector.version}")
+if ([string]::IsNullOrWhiteSpace($feVer)) {
+    kubectl apply -f "$PSScriptRoot/frontend-service.yaml"
+} else {
+    Write-Host "Preserving active Blue-Green selector (version=$feVer) on frontend-service." -ForegroundColor Gray
+}
+Write-Success "Services configured."
 
 # 8. Apply Ingress (if available)
 if (-not $SkipIngress) {

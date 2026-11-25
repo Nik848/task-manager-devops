@@ -11,7 +11,8 @@
 4. [Kubernetes (K8s): Production Orchestration](#4-kubernetes-k8s-production-orchestration)
 5. [CI/CD Pipeline with Jenkins](#5-cicd-pipeline-with-jenkins)
 6. [Security & Vulnerability Management](#6-security--vulnerability-management)
-7. [Hands-On DevOps Operations & Cheat Sheet](#7-hands-on-devops-operations--cheat-sheet)
+7. [Ansible Automation & Configuration Management (Phase 5)](#7-ansible-automation--configuration-management-phase-5)
+8. [Hands-On DevOps Operations & Cheat Sheet](#8-hands-on-devops-operations--cheat-sheet)
 
 ---
 
@@ -289,7 +290,192 @@ We built a tailored Jenkins environment (`jenkins/`):
 
 ---
 
-## 7. Hands-On DevOps Operations & Cheat Sheet
+## 7. Ansible Automation & Configuration Management (Phase 5)
+
+### Why Ansible?
+Ansible enables **Infrastructure as Code (IaC)** and automated configuration management without installing client agents on managed nodes. In our monorepo, Ansible automates:
+1. Docker Engine provisioning on Linux hosts (`install_docker.yml`).
+2. Kubernetes node setup via kubeadm (`install_kubernetes.yml`).
+3. Declarative application deployment across Kubernetes (`deploy_application.yml`).
+4. Safe non-sensitive configuration management via ConfigMaps (`configure_application.yml`).
+
+### WSL2 Control Machine Architecture
+Ansible runs directly inside **Ubuntu on WSL2** on the Windows 11 host:
+- **Ansible Core**: `2.20.1` running Python `3.14`.
+- **Integrated Docker**: WSL2 communicates directly with Docker Desktop's engine via named pipes/socket.
+- **Integrated Kubernetes**: WSL2 communicates directly with `desktop-control-plane` using `kubectl --context=docker-desktop`.
+
+### Playbook Inventory and Purposes
+
+```text
+ansible/
+├── ansible.cfg                # Configures inventory, default callbacks, disabled host key checks
+├── requirements.yml           # Required collections (ansible.posix, community.general)
+├── inventory/
+│   ├── hosts.ini              # Host definitions (local, docker_nodes, k8s_nodes)
+│   └── group_vars/
+│       └── all.yml            # Non-sensitive variables, ports, and package lists
+└── playbooks/
+    ├── install_docker.yml         # Installs Docker CE & Compose plugin on Ubuntu Linux hosts
+    ├── install_kubernetes.yml     # Provisions kubeadm, containerd, and kubelet on Linux nodes
+    ├── deploy_application.yml     # Orchestrates k8s/ manifests in dependency order on cluster
+    └── configure_application.yml  # Safely manages task-manager-config without exposing secrets
+```
+
+### Distinction Between Environments
+- **`install_docker.yml` & `install_kubernetes.yml`**: Designed, syntax-verified (`--syntax-check`), and preflight-guarded for conventional bare-metal or cloud Ubuntu Linux virtual machines. Features include idempotent containerd setup with enforced `SystemdCgroup = true`, pinned Kubernetes `v1.31` packages (`1.31.0-1.1`), predictable `/root/.kube/config` paths, and in-memory join token distribution. Both contain safety guards when run under WSL2 to avoid corrupting or resetting the host's existing Docker Desktop engine and Kubernetes cluster. They were not executed on live servers as no remote Linux targets were provisioned.
+- **`deploy_application.yml` & `configure_application.yml`**: Operationally executed and verified against the active Docker Desktop Kubernetes cluster (`docker-desktop`), managing live deployments, rollouts, and ConfigMaps safely with conditional rollout restarts. Strict secret protection ensures placeholder credentials from `k8s/secret.yaml` are never automatically applied, failures occur if the Secret is missing, and secret data is never exposed in output.
+
+### Key Ansible Commands
+```bash
+# Install collections from Ubuntu WSL2:
+ansible-galaxy collection install -r requirements.yml
+
+# Validate playbook syntax from Ubuntu WSL2:
+export ANSIBLE_CONFIG=ansible.cfg
+ansible-playbook -i inventory/hosts.ini --syntax-check playbooks/install_docker.yml
+ansible-playbook -i inventory/hosts.ini --syntax-check playbooks/install_kubernetes.yml
+ansible-playbook -i inventory/hosts.ini --syntax-check playbooks/deploy_application.yml
+ansible-playbook -i inventory/hosts.ini --syntax-check playbooks/configure_application.yml
+
+# Run Configuration Management:
+ansible-playbook -i inventory/hosts.ini playbooks/configure_application.yml
+
+# Run Application Deployment:
+ansible-playbook -i inventory/hosts.ini playbooks/deploy_application.yml
+
+# Dry-run check mode:
+ansible-playbook -i inventory/hosts.ini --check playbooks/configure_application.yml
+```
+
+---
+
+## 8. Terraform Infrastructure as Code (Phase 6)
+
+### Why Terraform?
+Terraform provides **declarative, reproducible Infrastructure as Code (IaC)**. While Ansible focuses on procedural tasks and configuration management, Terraform manages the complete lifecycle of cloud and container resources via declared state files (`.tfstate`), dependency graphs, and reusable modules.
+
+### Provider & Architecture in Local Docker Desktop
+- **Provider**: `kreuzwerker/docker` pinned to version `~> 3.0.2` (Terraform `>= 1.5.0`).
+- **Isolation Strategy**:
+  - **Docker Compose** runs the development stack on ports `3000` & `8080`.
+  - **Kubernetes** orchestrates the production application on port `80` (`LoadBalancer`).
+  - **Terraform** provisions an alternative, isolated container stack on host ports `3001` (backend) and `8088` (frontend) via a custom bridge network (`taskmanager-tf-network`) and persistent log volume (`taskmanager-tf-logs`).
+- **Demonstration Storage**: The `taskmanager-tf-logs` volume is mounted at `/app/logs` as a persistent volume demonstration. The Node.js Express backend logs directly to standard output via **Pino**, adhering to Twelve-Factor app principles.
+
+### Directory Structure & Reusable Module
+```text
+terraform/
+├── .gitignore                      # Protects .terraform/, *.tfstate, and *.tfvars
+├── README.md                       # Comprehensive operations guide
+├── main.tf                         # Root configuration, network, volume, module calls
+├── variables.tf                    # Parameterized variables (ports, images, sensitive credentials)
+├── outputs.tf                      # Useful endpoints and container IDs (secrets omitted)
+├── terraform.tfvars.example        # Sanitized template with placeholder secrets
+└── modules/
+    └── docker_container/           # Reusable container module
+        ├── main.tf                 # docker_container resource definition
+        ├── variables.tf            # Module input parameters
+        └── outputs.tf              # Container ID, name, published ports
+```
+
+### State-File Security Limitations
+- `sensitive = true` masks values in CLI output (`terraform plan`/`apply`), preventing visual exposure in terminal logs.
+- **It does NOT encrypt secrets in Terraform state (`.tfstate`)!** Attributes like `DATABASE_URL` and `JWT_SECRET` are stored as cleartext JSON inside `.tfstate`.
+- Local state files are strictly excluded from Git via `.gitignore`, should reside on full-disk encrypted filesystems (BitLocker / LUKS), and require encrypted remote backends (e.g. AWS S3 + KMS, Terraform Cloud) in team environments.
+- The `jwt_secret` variable has no insecure default and requires explicit configuration.
+
+### Relationship with the DevOps Stack
+- **Docker Compose**: Rapid local developer workflow (`3000`, `8080`).
+- **Kubernetes**: Multi-replica, self-healing, rolling production deployments (`80`).
+- **Ansible**: In-cluster ConfigMap management, dynamic conditional rollout triggers, and node bootstrapping.
+- **Terraform**: Declarative resource lifecycle management, modular abstractions, and isolated environments (`3001`, `8088`).
+
+### Key Terraform Commands
+```bash
+cd terraform
+
+# 1. Format check and validate configuration:
+terraform fmt -check
+terraform init
+terraform validate
+
+# 2. Plan changes:
+terraform plan
+
+# 3. Apply infrastructure:
+terraform apply -auto-approve
+
+# 4. Verify endpoints:
+curl http://localhost:8088/
+curl http://localhost:3001/health
+
+# 5. Clean teardown:
+terraform destroy -auto-approve
+```
+
+---
+
+## 9. Monitoring with Prometheus and Grafana (Phase 7)
+
+### Why Prometheus & Grafana?
+Observability is critical in production DevOps environments. Phase 7 implements automated metric scraping, alerting capabilities, and real-time visualization:
+- **Prometheus**: Pulls time-series metrics every 10–15s from application endpoints and Kubernetes cluster infrastructure.
+- **kube-state-metrics**: Collects in-cluster object health, pod lifecycle state, and readiness metrics directly from the Kubernetes API.
+- **Grafana**: Visualizes metrics across 8 real-time operational panels.
+- **Metrics Server & cAdvisor**: Captures real-time CPU and memory usage across nodes, pods, and containers.
+
+### Architecture & Isolation
+- **Namespace**: Dedicated `monitoring` namespace isolating monitoring infrastructure from application workloads.
+- **Backend Application Metrics**: Prometheus scrapes `backend-service.task-manager.svc.cluster.local:3000/metrics` capturing `http_requests_total`, `http_request_duration_seconds`, and Node.js process metrics (`process_cpu_seconds_total`, `process_resident_memory_bytes`, `nodejs_heap_size_used_bytes`).
+- **Pod Readiness Metrics**: `kube-state-metrics` (v2.12.0) runs under non-root UID 65534 with a minimal ClusterRole granting read access strictly to `pods` and `namespaces`. Scraped at `kube-state-metrics.monitoring.svc.cluster.local:8080/metrics`.
+- **Cluster & Container Metrics**: Kubelet cAdvisor scrapes provide `container_cpu_usage_seconds_total` and `container_memory_working_set_bytes`.
+- **Metrics Server**: Configured with `--kubelet-insecure-tls` for Docker Desktop, enabling `kubectl top nodes` and `kubectl top pods`.
+- **Security & Zero Leaked Secrets**:
+  - `monitoring/grafana/secret.yaml` was completely removed from version control.
+  - The deployment script (`monitoring/deploy.ps1`) enforces `$env:GRAFANA_ADMIN_PASSWORD` and halts immediately if unset or empty.
+  - The Secret (`grafana-secret`) is generated and applied dynamically at deploy-time via `kubectl create secret generic ... --dry-run=client -o yaml` without printing credentials.
+  - Both Prometheus (`UID 65534`), kube-state-metrics (`UID 65534`), and Grafana (`UID 472`) run as non-root containers with strict resource requests and limits. No public LoadBalancers are exposed; access is mediated through `kubectl port-forward`.
+
+```text
+monitoring/
+├── README.md                          # Full operations guide
+├── namespace.yaml                     # monitoring namespace
+├── metrics-server.yaml                # Metrics Server for kubectl top
+├── deploy.ps1                         # Deployment script requiring $env:GRAFANA_ADMIN_PASSWORD
+├── dashboards/
+│   └── dashboard-task-manager.json    # Standalone Grafana Dashboard JSON definition
+├── kube-state-metrics/
+│   ├── rbac.yaml                      # ServiceAccount & ClusterRole (pods/namespaces read)
+│   ├── deployment.yaml                # kube-state-metrics Deployment (v2.12.0, non-root)
+│   └── service.yaml                   # ClusterIP Service (8080)
+├── prometheus/
+│   ├── rbac.yaml                      # ServiceAccount & ClusterRole
+│   ├── configmap.yaml                 # Scrape configuration (backend, cAdvisor, ksm, prom)
+│   ├── deployment.yaml                # Prometheus Deployment
+│   └── service.yaml                   # ClusterIP Service (9090)
+└── grafana/
+    ├── configmap-datasources.yaml     # Auto-provisioned Prometheus datasource
+    ├── configmap-dashboards.yaml      # Dashboard provider
+    ├── configmap-dashboard-json.yaml  # ConfigMap wrapping dashboard JSON
+    ├── deployment.yaml                # Grafana Deployment (3000)
+    └── service.yaml                   # ClusterIP Service
+```
+
+### Accessing Dashboards
+```bash
+# Grafana (Host Port 3001 -> Container Port 3000):
+kubectl port-forward svc/grafana-service 3001:3000 -n monitoring
+# URL: http://localhost:3001 (User: admin / Password: configured in $env:GRAFANA_ADMIN_PASSWORD)
+
+# Prometheus (Host Port 9090 -> Container Port 9090):
+kubectl port-forward svc/prometheus-service 9090:9090 -n monitoring
+# URL: http://localhost:9090
+```
+
+---
+
+## 10. Hands-On DevOps Operations & Cheat Sheet
 
 ### 1. Run with Docker Compose (Local Dev)
 ```powershell
@@ -344,7 +530,7 @@ powershell -ExecutionPolicy Bypass -File .\jenkins\setup-jenkins.ps1
 
 ---
 
-## 8. Summary of What We Achieved
+## 11. Summary of What We Achieved
 
 | Area | What Was Accomplished |
 | :--- | :--- |
@@ -352,5 +538,135 @@ powershell -ExecutionPolicy Bypass -File .\jenkins\setup-jenkins.ps1
 | **Docker** | Secure multi-stage, non-root Dockerfiles for both services + `docker-compose.yml`. |
 | **Kubernetes** | Complete manifests in `k8s/` (Namespace, ConfigMap, Secret, Deployments, Services, PV/PVC, Ingress, RBAC). |
 | **CI/CD** | Production 5-stage declarative `Jenkinsfile` with automated build, test, packaging, and SCM push trigger. |
-| **Automation** | One-click PowerShell deployment scripts for Kubernetes (`deploy.ps1`) and Jenkins (`setup-jenkins.ps1`). |
+| **Ansible Automation** | 4 production playbooks for Docker, Kubernetes, Application Deployment, and Config Management running from WSL2. |
+| **Terraform IaC** | Modular Infrastructure as Code (`kreuzwerker/docker` ~> 3.0.2) with reusable container module, outputs, and isolated stack. |
+| **Monitoring (Prometheus & Grafana)** | Complete monitoring stack with auto-provisioned Prometheus, Grafana 8-panel dashboard, Metrics Server, and cAdvisor. |
+| **Centralized Logging (Fluentd)** | Lightweight Fluentd DaemonSet collecting application (Pino JSON), container, and Kubernetes logs with metadata enrichment. |
+| **Automation** | One-click PowerShell deployment scripts for Kubernetes (`deploy.ps1`), Jenkins (`setup-jenkins.ps1`), Monitoring (`deploy.ps1`), and Logging (`deploy.ps1`). |
 | **Git & Versioning**| Clean, sanitized repository pushed to GitHub on branch **`develop`** without secret leaks. |
+
+---
+
+## 12. Centralized Logging with Fluentd (Phase 8)
+
+### Logging Architecture
+Phase 8 implements lightweight centralized log collection on Docker Desktop Kubernetes using a **Fluentd DaemonSet** (`fluent/fluentd-kubernetes-daemonset:v1.17-debian-forward-1`) deployed in the isolated `logging` namespace:
+- **Log Collection Sources**: Tails container `stdout`/`stderr` logs from `/var/log/containers/*.log` (which resolve to `/var/log/pods/...` under containerd CRI format), while explicitly excluding Fluentd's own logs (`exclude_path`) to prevent recursive loops.
+- **Metadata Enrichment & Secret Scope**: Uses `fluent-plugin-kubernetes_metadata_filter` with a read-only ServiceAccount (`pods`, `namespaces` only—no Kubernetes API permissions to read `secrets`) to attach `namespace_name`, `pod_name`, `container_name`, and pod/namespace labels. Fluentd does not directly inspect container environment variables; however, because it collects `stdout`/`stderr`, any secret accidentally printed by an application to stdout/stderr can still be collected. Applications must avoid logging sensitive values.
+- **JSON Parsing & Separation**:
+  - **Application Logs (`task-manager` namespace)**: Parses structured Pino JSON logs (`@type parser` with `reserve_time true`) while gracefully preserving plain-text Nginx logs from `frontend`. Tagged with `log_category: "application"`.
+  - **Infrastructure Logs (other namespaces)**: `kube-system`, `monitoring`, and control-plane logs are tagged with `log_category: "infrastructure"`.
+
+### Fluentd Components (`logging/`)
+```text
+logging/
+├── README.md          # Full operations, storage, and verification manual
+├── namespace.yaml     # Dedicated 'logging' namespace
+├── rbac.yaml          # ServiceAccount + read-only ClusterRole (pods, namespaces)
+├── configmap.yaml     # Fluentd fluent.conf pipeline definition
+├── daemonset.yaml     # Fluentd DaemonSet (resource limits, tolerations, hostPath mounts)
+└── deploy.ps1         # One-click Windows PowerShell deployment script
+```
+
+### Storage, Retention & Limitations
+- **Centralized Local Storage**: Logs are written as daily time-sliced JSON files (`timekey 1d`, `flush_interval 5s`) to `/var/log/fluentd-central/` backed by a node `hostPath` volume:
+  - Application logs: `/var/log/fluentd-central/application/app.YYYYMMDD.log`
+  - Infrastructure logs: `/var/log/fluentd-central/infrastructure/infra.YYYYMMDD.log`
+- **Retention**: Files flush every 5 seconds into daily files; no automatic age-based purging is configured.
+- **Persistence & Limitations**:
+  - Previously flushed log files written to `/var/log/fluentd-central` (`hostPath`) persist across Fluentd pod restarts on the same node.
+  - However, Fluentd's position file (`pos_file`) and file buffers (`/fluentd/state`) are stored in `emptyDir` and are lost when the Fluentd pod is recreated. This can cause log re-reading/duplicates or loss of buffered, unflushed records; this setup does not provide exactly-once collection or guaranteed delivery.
+  - Because `hostPath` is node-local to Docker Desktop (`desktop-control-plane`), logs do not replicate across multi-node clusters and are lost if the cluster/VM is reset.
+  - `/var/log/pods` on Docker Desktop is `0750` owned by `root:root`, so Fluentd runs with `allowPrivilegeEscalation: false` and UID `0` to read host CRI logs; no LoadBalancer or NodePort is exposed.
+
+### Deployment & Verification Commands
+```powershell
+# Deploy Fluentd logging stack
+powershell -ExecutionPolicy Bypass -File .\logging\deploy.ps1
+
+# Check DaemonSet and Pod health
+kubectl get ds,pods,svc -n logging
+
+# Validate Fluentd configuration syntax
+kubectl exec -n logging ds/fluentd -- fluentd --dry-run -c /fluentd/etc/fluent.conf
+
+# Inspect collected application and infrastructure logs
+kubectl exec -n logging ds/fluentd -- sh -c "grep 'request completed' /var/log/fluentd-central/application/app.20261125.log | tail -n 2"
+kubectl exec -n logging ds/fluentd -- sh -c "grep 'kube-system' /var/log/fluentd-central/infrastructure/infra.20261125.log | tail -n 2"
+```
+
+---
+
+## 13. Security Implementation — DevSecOps (Phase 9)
+
+### Security Architecture
+Phase 9 integrates automated static analysis, container vulnerability scanning, secret segregation, hardened Docker builds, and least-privilege Kubernetes RBAC into the existing DevOps pipeline without redesigning earlier phases:
+- **SonarQube Community Build (`security/docker-compose.sonarqube.yml`)**: Pinned `sonarqube:25.12.0.117093-community` bound to `127.0.0.1:9000` with persistent named volumes and embedded H2 database. Project metadata and exclusions are defined in `sonar-project.properties`.
+- **Jenkins Credentials**: `sonarqube-token` is stored encrypted in Jenkins Credentials and injected via `withCredentials` (`SONAR_TOKEN`), masked in build logs. Jenkins communicates with SonarQube via `http://host.docker.internal:9000`.
+- **Docker Image Hardening & Trivy Scanning**:
+  - Pinned base images (`node:20.20.2-alpine3.23`, `nginx:1.27.5-alpine`) with `apk upgrade --no-cache`.
+  - Backend runtime removes unnecessary `npm`/`corepack` build tools and excludes `package-lock.json`; `drizzle-orm` upgraded to `^0.45.2` to remediate `CVE-2026-39356`.
+  - Jenkins Stages 7 and 8 run `trivy image --exit-code 1 --scanners vuln --severity HIGH,CRITICAL` on both freshly built images.
+- **Kubernetes Secret & RBAC Hardening**:
+  - `k8s/deploy.ps1` requires `DATABASE_URL`, `JWT_SECRET`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD` in `app/backend/.env` (with no hardcoded administrator defaults) and fails safely if `task-manager-secret` is missing and any required key is absent or empty.
+  - `k8s/rbac.yaml` defines `task-manager-operator` strictly as an explicitly provisioned RBAC demonstration account (not used by any application pod or deployment script), narrowed to read-only (`pods`, `pods/log`, `services`) plus namespace-scoped `deployments` management, with zero `secrets` access.
+  - `k8s/backend-deployment.yaml` and `k8s/frontend-deployment.yaml` set `automountServiceAccountToken: false` so application pods receive zero Kubernetes API access.
+  - Monitoring and Fluentd ServiceAccounts retain read-only, least-privilege permissions with no Secret access.
+
+### Verification & Limitations
+```powershell
+# Start SonarQube locally
+docker compose -f security/docker-compose.sonarqube.yml up -d
+curl.exe -s http://localhost:9000/api/system/status
+
+# Verify RBAC boundaries
+kubectl auth can-i get secrets --as=system:serviceaccount:task-manager:task-manager-operator -n task-manager
+kubectl auth can-i get pods --as=system:serviceaccount:task-manager:default -n task-manager
+```
+- **Limitations**: Local Docker Desktop single-node environment is not production-grade (SonarQube uses embedded H2, Jenkins mounts `/var/run/docker.sock`, and Kubernetes lacks an external KMS or enforced NetworkPolicies). See `security/README.md` for full details.
+
+---
+
+## 14. Blue-Green Deployment Strategy (Phase 10)
+
+### Architecture & Traffic Switching
+Phase 10 implements zero-downtime **Blue-Green Deployment** on Kubernetes (`task-manager` namespace) using separate `blue` (`backend-blue`, `frontend-blue` on `v1.0.0` / `v1.0.1`) and `green` (`backend-green`, `frontend-green` on `v2.0.0-green`) Deployments:
+- **Service Selector Routing & Safe Redeployment**: `k8s/backend-service.yaml` (`ClusterIP :3000`) and `k8s/frontend-service.yaml` (`LoadBalancer :80`) default to `version: blue` so legacy unversioned deployments cannot accidentally receive traffic. `k8s/deploy.ps1` preserves any active `version=blue|green` selector so rerunning standard deployment cannot reset an active Green environment.
+- **Shared Infrastructure**: Blue and Green reuse `task-manager-config`, `task-manager-secret`, `task-manager-pvc`, and the Supabase PostgreSQL database without duplicating secrets or storage.
+- **Controller Script (`k8s/blue-green.ps1`)**:
+  - `status`: Displays Blue/Green pod readiness, images, and active Service selectors.
+  - `deploy-blue` / `deploy-green`: Builds/deploys the environment and independently verifies Green (`/health` and `/`) via `kubectl port-forward` before any traffic switch.
+  - `switch-green` / `rollback-blue`: Records previous selectors, enforces readiness gates, updates selectors with exit-code checks, verifies `EndpointSlices` converge exclusively to the target color, and validates `http://localhost/health` and `http://localhost/`. If any update or verification step fails, it automatically restores both previous selectors and reports rollback status.
+
+### Shared Database & Environment Limitations
+- **Database Compatibility**: Blue and Green share the same Supabase PostgreSQL instance. Never run concurrent migrations across Blue and Green; schema changes must remain backward-compatible during the cutover/rollback window.
+- **Single-Node Docker Desktop**: `task-manager-pvc` (`ReadWriteOnce` `hostPath`) works across Blue and Green on single-node `desktop-control-plane`, whereas multi-node clusters cannot mount a single `RWO` block volume across different nodes.
+- **Jenkins Integration**: `Jenkinsfile` remains CI-focused (`pollSCM`, SonarQube, Trivy, packaging) so every Git push does not automatically switch production traffic; Blue-Green cutover is intentionally operator-triggered via `k8s/blue-green.ps1`. See `k8s/BLUE-GREEN.md` for full details.
+
+---
+
+## 15. GitOps Implementation Using ArgoCD (Phase 11)
+
+### GitOps Architecture & Responsibilities
+Phase 11 implements declarative **GitOps Continuous Delivery** using **ArgoCD (`v3.6.1`)** installed in the dedicated `argocd` namespace:
+- **Jenkins (CI)** remains responsible for Continuous Integration (`pollSCM`, automated tests, SonarQube static analysis, Docker builds, Trivy vulnerability scans, and artifact packaging) without automatically deploying or switching production traffic on push.
+- **ArgoCD (CD)** continuously reconciles `gitops/` on branch `develop` of `https://github.com/Nik848/task-manager-devops` into namespace `task-manager` (`prune: true`, `selfHeal: true`, `RespectIgnoreDifferences=true`, `ServerSideApply=true`).
+
+### Resource Ownership & Blue-Green Compatibility
+- **Managed by ArgoCD (`gitops/manifests/`)**: `ConfigMap/task-manager-config`, RBAC (`task-manager-operator`, `task-manager-role`, `task-manager-rolebinding`), Blue & Green Deployments (`backend-blue`, `frontend-blue`, `backend-green`, `frontend-green`), and `Service` metadata/ports.
+- **Protected Outside GitOps**: `Secret/task-manager-secret`, `PV/task-manager-pv`, and `PVC/task-manager-pvc` are intentionally excluded from `gitops/` so ArgoCD never overwrites credentials or prunes persistent storage.
+- **Blue-Green Coexistence**: `gitops/application.yaml` ignores `/spec/selector` differences on `Service` resources (`ignoreDifferences` + `RespectIgnoreDifferences=true`), enabling `k8s/blue-green.ps1` to switch traffic between `blue` and `green` without ArgoCD self-heal resetting selectors.
+
+### Key Operations & Security
+```powershell
+# Port-forward ArgoCD UI locally (no public LoadBalancer/NodePort)
+kubectl port-forward svc/argocd-server -n argocd 8084:443
+
+# Retrieve initial admin password securely (never commit to Git)
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}"
+
+# Check Application status and trigger hard refresh
+kubectl get application task-manager-gitops -n argocd
+kubectl annotate application task-manager-gitops -n argocd argocd.argoproj.io/refresh=hard --overwrite
+```
+- **Limitations**: Docker Desktop has no Ingress controller installed, so `Ingress/task-manager-ingress` is excluded from `gitops/` to keep ArgoCD health `Healthy`. See `gitops/README.md` for full details.

@@ -1,0 +1,126 @@
+---
+# ==============================================================================
+# Playbook: configure_application.yml
+# Purpose: Manages non-sensitive application configuration in Kubernetes ConfigMaps
+#          using Ansible variables as the single source of truth.
+#          Safely updates task-manager-config and triggers a controlled backend
+#          rollout ONLY when the configuration has changed.
+# ==============================================================================
+
+- name: Manage Application Configuration via Kubernetes ConfigMap
+  hosts: local
+  gather_facts: false
+
+  vars_files:
+    - "../group_vars/all.yml"
+
+  vars:
+    context_flag: "--context={{ k8s_context }}"
+
+  tasks:
+    - name: 1. Verify target cluster connectivity
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} cluster-info
+      register: cluster_check
+      changed_when: false
+
+    - name: 2. Ensure target namespace exists
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} get namespace {{ k8s_namespace }}
+      changed_when: false
+
+    - name: 2b. Check whether ArgoCD Application CRD is installed (fail on cluster/permission errors)
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} get crd applications.argoproj.io --ignore-not-found -o jsonpath='{.metadata.name}'
+      register: argocd_crd_check
+      changed_when: false
+
+    - name: 2c. Detect whether ArgoCD Application task-manager-gitops exists (fail on cluster/permission errors)
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} get application task-manager-gitops -n argocd --ignore-not-found -o jsonpath='{.metadata.name}'
+      register: argocd_app_check
+      when: (argocd_crd_check.stdout | default('') | trim) == 'applications.argoproj.io'
+      changed_when: false
+
+    - name: Set GitOps ownership fact
+      ansible.builtin.set_fact:
+        gitops_active: "{{ (argocd_crd_check.stdout | default('') | trim) == 'applications.argoproj.io' and (argocd_app_check.stdout | default('') | trim) == 'task-manager-gitops' }}"
+
+    - name: Inform operator when ArgoCD is authoritative owner of task-manager-config
+      ansible.builtin.debug:
+        msg: >-
+          ArgoCD Application 'task-manager-gitops' is active in namespace 'argocd' and is the
+          authoritative owner of 'task-manager-config'. Skipping Ansible ConfigMap overwrite
+          and legacy backend rollout. Make configuration changes in 'gitops/manifests/configmap.yaml'
+          and commit to branch 'develop'.
+      when: gitops_active
+
+    - name: 3. Apply non-sensitive ConfigMap from Ansible single source of truth (non-GitOps only)
+      ansible.builtin.shell: |
+        cat <<EOF | kubectl {{ context_flag }} apply -f -
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: task-manager-config
+          namespace: {{ k8s_namespace }}
+          labels:
+            app.kubernetes.io/name: task-manager-config
+            app.kubernetes.io/part-of: task-manager-system
+            managed-by: ansible
+        data:
+          NODE_ENV: "{{ app_node_env }}"
+          PORT: "{{ app_port }}"
+          LOG_LEVEL: "{{ app_log_level }}"
+          CORS_ORIGIN: "{{ app_cors_origin }}"
+          ADMIN_NAME: "{{ app_admin_name }}"
+        EOF
+      register: cm_apply_output
+      changed_when: "'configured' in cm_apply_output.stdout or 'created' in cm_apply_output.stdout"
+      when: not gitops_active
+
+    - name: 4. Trigger controlled backend rollout ONLY when ConfigMap changed
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} rollout restart deployment/backend -n {{ k8s_namespace }}
+      when:
+        - not gitops_active
+        - cm_apply_output.changed | default(false)
+      register: backend_restart_out
+
+    - name: 5. Wait for backend rollout completion if configuration changed
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} rollout status deployment/backend -n {{ k8s_namespace }} --timeout=120s
+      when:
+        - not gitops_active
+        - cm_apply_output.changed | default(false)
+
+    - name: 6. Verify backend deployment availability
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} get deployments -n {{ k8s_namespace }} -l app=backend
+      register: backend_avail
+      changed_when: false
+
+    - name: 7. Verify task-manager-config ConfigMap exists and inspect contents
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} get configmap task-manager-config -n {{ k8s_namespace }} -o yaml
+      register: cm_verify
+      changed_when: false
+
+    - name: 8. Verify sensitive Secret task-manager-secret exists (never printing secret data)
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} get secret task-manager-secret -n {{ k8s_namespace }} --ignore-not-found -o jsonpath='{.metadata.name}'
+      register: secret_verify
+      changed_when: false
+
+    - name: Fail if task-manager-secret is missing
+      ansible.builtin.fail:
+        msg: "CRITICAL: Required Secret 'task-manager-secret' is missing in namespace '{{ k8s_namespace }}'."
+      when: secret_verify.stdout == ''
+
+    - name: Display Configuration Management Verification Summary
+      ansible.builtin.debug:
+        msg:
+          - "GitOps Active (ArgoCD): {{ gitops_active }}"
+          - "ConfigMap Status: {{ gitops_active | ternary('Managed by ArgoCD (task-manager-gitops) - skipped Ansible overwrite', (cm_apply_output.stdout | default('') | trim)) }}"
+          - "Rollout Triggered: {{ (not gitops_active) and (cm_apply_output.changed | default(false)) }}"
+          - "Secret Preserved: {{ (secret_verify.stdout != '') | ternary('task-manager-secret (present and untouched)', 'missing') }}"
+          - "Configured Environment: {{ app_node_env }}"

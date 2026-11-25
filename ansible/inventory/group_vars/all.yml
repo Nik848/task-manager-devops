@@ -1,0 +1,47 @@
+---
+# ==============================================================================
+# Ansible Group Variables: Task Management System (Phase 5)
+# ==============================================================================
+
+# Kubernetes Cluster & Deployment Configuration
+k8s_context: "docker-desktop"
+k8s_namespace: "task-manager"
+k8s_manifests_dir: "{{ playbook_dir }}/../../k8s"
+
+# Non-Sensitive Application Settings (Injected into task-manager-config ConfigMap)
+app_node_env: "production"
+app_port: "3000"
+app_log_level: "info"
+app_cors_origin: "http://localhost,http://localhost:80,http://localhost:8080,http://task-manager.local,*"
+app_admin_name: "Admin"
+
+# Docker Installation Settings (for conventional Ubuntu Linux hosts)
+docker_apt_prereqs:
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+  - lsb-release
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+
+# Kubernetes Installation Settings (for conventional Ubuntu Linux hosts via kubeadm)
+# Kubernetes v1.31 release aligned with pinned apt packages
+k8s_minor_version: "1.31"
+k8s_apt_release: "v1.31"
+k8s_package_version: "1.31.0-1.1"
+k8s_packages:
+  - "kubelet={{ k8s_package_version }}"
+  - "kubeadm={{ k8s_package_version }}"
+  - "kubectl={{ k8s_package_version }}"
+k8s_package_names:
+  - kubelet
+  - kubeadm
+  - kubectl
+k8s_pod_network_cidr: "10.244.0.0/16"
+k8s_admin_kubeconfig_dir: "/root/.kube"
+k8s_admin_kubeconfig: "/root/.kube/config"
