@@ -642,3 +642,31 @@ Phase 10 implements zero-downtime **Blue-Green Deployment** on Kubernetes (`task
 - **Database Compatibility**: Blue and Green share the same Supabase PostgreSQL instance. Never run concurrent migrations across Blue and Green; schema changes must remain backward-compatible during the cutover/rollback window.
 - **Single-Node Docker Desktop**: `task-manager-pvc` (`ReadWriteOnce` `hostPath`) works across Blue and Green on single-node `desktop-control-plane`, whereas multi-node clusters cannot mount a single `RWO` block volume across different nodes.
 - **Jenkins Integration**: `Jenkinsfile` remains CI-focused (`pollSCM`, SonarQube, Trivy, packaging) so every Git push does not automatically switch production traffic; Blue-Green cutover is intentionally operator-triggered via `k8s/blue-green.ps1`. See `k8s/BLUE-GREEN.md` for full details.
+
+---
+
+## 15. GitOps Implementation Using ArgoCD (Phase 11)
+
+### GitOps Architecture & Responsibilities
+Phase 11 implements declarative **GitOps Continuous Delivery** using **ArgoCD (`v3.6.1`)** installed in the dedicated `argocd` namespace:
+- **Jenkins (CI)** remains responsible for Continuous Integration (`pollSCM`, automated tests, SonarQube static analysis, Docker builds, Trivy vulnerability scans, and artifact packaging) without automatically deploying or switching production traffic on push.
+- **ArgoCD (CD)** continuously reconciles `gitops/` on branch `develop` of `https://github.com/Nik848/task-manager-devops` into namespace `task-manager` (`prune: true`, `selfHeal: true`, `RespectIgnoreDifferences=true`, `ServerSideApply=true`).
+
+### Resource Ownership & Blue-Green Compatibility
+- **Managed by ArgoCD (`gitops/manifests/`)**: `ConfigMap/task-manager-config`, RBAC (`task-manager-operator`, `task-manager-role`, `task-manager-rolebinding`), Blue & Green Deployments (`backend-blue`, `frontend-blue`, `backend-green`, `frontend-green`), and `Service` metadata/ports.
+- **Protected Outside GitOps**: `Secret/task-manager-secret`, `PV/task-manager-pv`, and `PVC/task-manager-pvc` are intentionally excluded from `gitops/` so ArgoCD never overwrites credentials or prunes persistent storage.
+- **Blue-Green Coexistence**: `gitops/application.yaml` ignores `/spec/selector` differences on `Service` resources (`ignoreDifferences` + `RespectIgnoreDifferences=true`), enabling `k8s/blue-green.ps1` to switch traffic between `blue` and `green` without ArgoCD self-heal resetting selectors.
+
+### Key Operations & Security
+```powershell
+# Port-forward ArgoCD UI locally (no public LoadBalancer/NodePort)
+kubectl port-forward svc/argocd-server -n argocd 8084:443
+
+# Retrieve initial admin password securely (never commit to Git)
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}"
+
+# Check Application status and trigger hard refresh
+kubectl get application task-manager-gitops -n argocd
+kubectl annotate application task-manager-gitops -n argocd argocd.argoproj.io/refresh=hard --overwrite
+```
+- **Limitations**: Docker Desktop has no Ingress controller installed, so `Ingress/task-manager-ingress` is excluded from `gitops/` to keep ArgoCD health `Healthy`. See `gitops/README.md` for full details.
