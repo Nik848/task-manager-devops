@@ -37,7 +37,18 @@ kubectl create secret generic grafana-secret `
 
 kubectl apply -f "$PSScriptRoot\grafana\configmap-datasources.yaml"
 kubectl apply -f "$PSScriptRoot\grafana\configmap-dashboards.yaml"
-kubectl apply -f "$PSScriptRoot\grafana\configmap-dashboard-json.yaml"
+
+# Generate dashboard ConfigMap from standalone JSON files (single source of truth)
+$dashboardDir = "$PSScriptRoot\dashboards"
+$fromFileArgs = @("--from-file=task-manager-overview.json=$dashboardDir\dashboard-task-manager.json")
+if (Test-Path "$dashboardDir\dashboard-task-manager-logs.json") {
+    $fromFileArgs += "--from-file=task-manager-logs.json=$dashboardDir\dashboard-task-manager-logs.json"
+}
+kubectl create configmap grafana-dashboard-task-manager `
+    $fromFileArgs `
+    -n monitoring `
+    --dry-run=client -o yaml | kubectl apply -f -
+
 kubectl apply -f "$PSScriptRoot\grafana\deployment.yaml"
 kubectl apply -f "$PSScriptRoot\grafana\service.yaml"
 
