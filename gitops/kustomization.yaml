@@ -9,7 +9,6 @@ kind: Kustomization
 resources:
   - manifests/configmap.yaml
   - manifests/rbac.yaml
-  - manifests/ingress.yaml
   - manifests/backend-service.yaml
   - manifests/frontend-service.yaml
   - manifests/backend-blue.yaml
