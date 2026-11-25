@@ -552,7 +552,7 @@ powershell -ExecutionPolicy Bypass -File .\jenkins\setup-jenkins.ps1
 ### Logging Architecture
 Phase 8 implements lightweight centralized log collection on Docker Desktop Kubernetes using a **Fluentd DaemonSet** (`fluent/fluentd-kubernetes-daemonset:v1.17-debian-forward-1`) deployed in the isolated `logging` namespace:
 - **Log Collection Sources**: Tails container `stdout`/`stderr` logs from `/var/log/containers/*.log` (which resolve to `/var/log/pods/...` under containerd CRI format), while explicitly excluding Fluentd's own logs (`exclude_path`) to prevent recursive loops.
-- **Metadata Enrichment**: Uses `fluent-plugin-kubernetes_metadata_filter` with a read-only ServiceAccount (`pods`, `namespaces` only—no `secrets` access) to attach `namespace_name`, `pod_name`, `container_name`, and pod/namespace labels.
+- **Metadata Enrichment & Secret Scope**: Uses `fluent-plugin-kubernetes_metadata_filter` with a read-only ServiceAccount (`pods`, `namespaces` only—no Kubernetes API permissions to read `secrets`) to attach `namespace_name`, `pod_name`, `container_name`, and pod/namespace labels. Fluentd does not directly inspect container environment variables; however, because it collects `stdout`/`stderr`, any secret accidentally printed by an application to stdout/stderr can still be collected. Applications must avoid logging sensitive values.
 - **JSON Parsing & Separation**:
   - **Application Logs (`task-manager` namespace)**: Parses structured Pino JSON logs (`@type parser` with `reserve_time true`) while gracefully preserving plain-text Nginx logs from `frontend`. Tagged with `log_category: "application"`.
   - **Infrastructure Logs (other namespaces)**: `kube-system`, `monitoring`, and control-plane logs are tagged with `log_category: "infrastructure"`.
@@ -574,7 +574,8 @@ logging/
   - Infrastructure logs: `/var/log/fluentd-central/infrastructure/infra.YYYYMMDD.log`
 - **Retention**: Files flush every 5 seconds into daily files; no automatic age-based purging is configured.
 - **Persistence & Limitations**:
-  - Logs written to `/var/log/fluentd-central` persist across Fluentd pod restarts on the same node, though `pos_file` (`emptyDir`) resets on pod recreation.
+  - Previously flushed log files written to `/var/log/fluentd-central` (`hostPath`) persist across Fluentd pod restarts on the same node.
+  - However, Fluentd's position file (`pos_file`) and file buffers (`/fluentd/state`) are stored in `emptyDir` and are lost when the Fluentd pod is recreated. This can cause log re-reading/duplicates or loss of buffered, unflushed records; this setup does not provide exactly-once collection or guaranteed delivery.
   - Because `hostPath` is node-local to Docker Desktop (`desktop-control-plane`), logs do not replicate across multi-node clusters and are lost if the cluster/VM is reset.
   - `/var/log/pods` on Docker Desktop is `0750` owned by `root:root`, so Fluentd runs with `allowPrivilegeEscalation: false` and UID `0` to read host CRI logs; no LoadBalancer or NodePort is exposed.
 

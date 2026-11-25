@@ -59,7 +59,7 @@ logging/
 3. **Node Log Access Context**: On Docker Desktop (`desktop-control-plane`), `/var/log/pods` is owned by `root:root` with mode `0750` (`drwxr-x---`). Because `/var/log/containers/*.log` symlinks resolve into `/var/log/pods`, Fluentd runs with `allowPrivilegeEscalation: false` and default container UID `0` to read host container logs without permission errors. Host log mounts (`/var/log` and `/var/lib/docker/containers`) are strictly `readOnly: true`.
 4. **Self-Logging Prevention**: `exclude_path` explicitly ignores `/var/log/containers/fluentd*.log` and `/var/log/containers/*_logging_fluentd-*.log` to prevent recursive log loops.
 5. **No Public Exposure**: No Kubernetes `Service`, `NodePort`, or `LoadBalancer` is created.
-6. **No Secret Collection**: Fluentd only tails container `stdout`/`stderr` streams and enriches with pod/namespace metadata; environment variables and Secret values are never read.
+6. **Secret & Environment Variable Scope**: Fluentd does not have Kubernetes API permissions to read `Secret` objects and does not directly inspect container environment variables. However, because Fluentd collects container `stdout` and `stderr` streams, any sensitive value or secret accidentally printed by an application to stdout/stderr will be collected. Applications must never log secrets or credentials.
 
 ---
 
@@ -70,7 +70,7 @@ logging/
   - **Infrastructure logs** (all other namespaces, e.g., `kube-system`, `monitoring`): `/var/log/fluentd-central/infrastructure/infra.YYYYMMDD.log` (`log_category: "infrastructure"`)
 - **Retention & Rotation**: Fluentd buffers flush every `5s` into daily time-sliced files (`timekey 1d`). No automatic age-based deletion/purging is configured inside Fluentd; files accumulate daily until manually cleaned or rotated by the host.
 - **Persistence Behavior**:
-  - **Pod Deletion**: Because `/var/log/fluentd-central` uses `hostPath` (`DirectoryOrCreate`) on the single node, collected log files **survive Fluentd pod restarts or deletions** on that same node (state/position tracking `pos_file` is stored in `emptyDir` `/fluentd/state`, so a restarted pod re-reads from head if `emptyDir` is cleared).
+  - **Pod Deletion & State Limitations**: Because `/var/log/fluentd-central` uses `hostPath` (`DirectoryOrCreate`) on the single node, previously flushed log files survive Fluentd pod restarts or deletions on that same node. However, Fluentd's position file (`pos_file`) and file buffers (`/fluentd/state`) are stored in an `emptyDir` volume and are lost whenever the Fluentd pod is recreated. As a result, pod recreation can cause log re-reading and duplicate entries (since `read_from_head true` re-reads existing node log files) or the loss of buffered, unflushed records. This lightweight setup does **not** provide exactly-once collection or guaranteed delivery.
   - **Cluster Restart / Multi-Node Limitations**: Data is bound to the Docker Desktop Linux VM/node filesystem. It does **not** replicate across nodes in a multi-node cluster and will be lost if the Docker Desktop VM data or Kubernetes cluster is reset/destroyed.
 
 ---
