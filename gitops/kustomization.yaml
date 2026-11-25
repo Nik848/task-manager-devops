@@ -15,4 +15,3 @@ resources:
   - manifests/frontend-blue.yaml
   - manifests/backend-green.yaml
   - manifests/frontend-green.yaml
-  - manifests/test-prune-cm.yaml
