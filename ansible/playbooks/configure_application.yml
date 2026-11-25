@@ -29,16 +29,22 @@
         kubectl {{ context_flag }} get namespace {{ k8s_namespace }}
       changed_when: false
 
-    - name: 2b. Detect whether ArgoCD Application task-manager-gitops manages GitOps config
+    - name: 2b. Check whether ArgoCD Application CRD is installed (fail on cluster/permission errors)
+      ansible.builtin.command: >-
+        kubectl {{ context_flag }} get crd applications.argoproj.io --ignore-not-found -o jsonpath='{.metadata.name}'
+      register: argocd_crd_check
+      changed_when: false
+
+    - name: 2c. Detect whether ArgoCD Application task-manager-gitops exists (fail on cluster/permission errors)
       ansible.builtin.command: >-
         kubectl {{ context_flag }} get application task-manager-gitops -n argocd --ignore-not-found -o jsonpath='{.metadata.name}'
       register: argocd_app_check
+      when: (argocd_crd_check.stdout | default('') | trim) == 'applications.argoproj.io'
       changed_when: false
-      failed_when: false
 
     - name: Set GitOps ownership fact
       ansible.builtin.set_fact:
-        gitops_active: "{{ (argocd_app_check.stdout | default('') | trim) == 'task-manager-gitops' }}"
+        gitops_active: "{{ (argocd_crd_check.stdout | default('') | trim) == 'applications.argoproj.io' and (argocd_app_check.stdout | default('') | trim) == 'task-manager-gitops' }}"
 
     - name: Inform operator when ArgoCD is authoritative owner of task-manager-config
       ansible.builtin.debug:
