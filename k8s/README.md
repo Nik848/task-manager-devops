@@ -73,6 +73,9 @@ k8s/
 ├── task-manager-pvc.yaml      # PersistentVolumeClaim bound to task-manager-pv
 ├── rbac.yaml                  # ServiceAccount, Role, and RoleBinding (Least Privilege)
 ├── deploy.ps1                 # Automated PowerShell deployment script
+├── blue-green.ps1             # Blue-Green deployment, traffic switch, and rollback controller
+├── BLUE-GREEN.md              # Phase 10 Blue-Green architecture and verification guide
+├── blue-green/                # Blue and Green backend/frontend Deployment manifests
 └── README.md                  # Comprehensive documentation and verification manual
 ```
 
@@ -320,3 +323,16 @@ kubectl auth can-i delete namespaces --as=system:serviceaccount:task-manager:tas
 5. **`05_rolling_update_and_rollback.png`**: Output of `kubectl set image` followed by `kubectl rollout undo` showing revision history.
 6. **`06_pv_pvc_bound.png`**: Output of `kubectl get pv,pvc -n task-manager` confirming `Bound` status.
 7. **`07_rbac_auth_can_i.png`**: Output of `kubectl auth can-i` demonstrating restricted serviceaccount permissions.
+
+---
+
+## 11. Blue-Green Deployment (Phase 10)
+
+For zero-downtime release switching and instant rollback between `blue` (`v1.0.0` / `v1.0.1`) and `green` (`v2.0.0-green`) environments, see [BLUE-GREEN.md](./BLUE-GREEN.md) and use `k8s/blue-green.ps1`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\k8s\blue-green.ps1 -Action status
+powershell -ExecutionPolicy Bypass -File .\k8s\blue-green.ps1 -Action deploy-green
+powershell -ExecutionPolicy Bypass -File .\k8s\blue-green.ps1 -Action switch-green
+powershell -ExecutionPolicy Bypass -File .\k8s\blue-green.ps1 -Action rollback-blue
+```

@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-blue
+  namespace: task-manager
+  labels:
+    app: backend
+    version: blue
+    app.kubernetes.io/name: backend-blue
+    app.kubernetes.io/part-of: task-manager-system
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: backend
+      version: blue
+  template:
+    metadata:
+      labels:
+        app: backend
+        version: blue
+        app.kubernetes.io/name: backend
+    spec:
+      automountServiceAccountToken: false
+      initContainers:
+        - name: init-storage-permissions
+          image: taskmanager-backend:v1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "chown -R 1001:1001 /app/logs && chmod -R 775 /app/logs"]
+          volumeMounts:
+            - name: app-storage
+              mountPath: /app/logs
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+      containers:
+        - name: backend
+          image: taskmanager-backend:v1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: task-manager-config
+            - secretRef:
+                name: task-manager-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: app-storage
+              mountPath: /app/logs
+      volumes:
+        - name: app-storage
+          persistentVolumeClaim:
+            claimName: task-manager-pvc
+      restartPolicy: Always

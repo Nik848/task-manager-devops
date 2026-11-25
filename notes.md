@@ -624,3 +624,21 @@ kubectl auth can-i get secrets --as=system:serviceaccount:task-manager:task-mana
 kubectl auth can-i get pods --as=system:serviceaccount:task-manager:default -n task-manager
 ```
 - **Limitations**: Local Docker Desktop single-node environment is not production-grade (SonarQube uses embedded H2, Jenkins mounts `/var/run/docker.sock`, and Kubernetes lacks an external KMS or enforced NetworkPolicies). See `security/README.md` for full details.
+
+---
+
+## 14. Blue-Green Deployment Strategy (Phase 10)
+
+### Architecture & Traffic Switching
+Phase 10 implements zero-downtime **Blue-Green Deployment** on Kubernetes (`task-manager` namespace) using separate `blue` (`backend-blue`, `frontend-blue` on `v1.0.0` / `v1.0.1`) and `green` (`backend-green`, `frontend-green` on `v2.0.0-green`) Deployments:
+- **Service Selector Routing**: Existing `backend-service` (`ClusterIP :3000`) and `frontend-service` (`LoadBalancer :80`) route traffic exclusively to the active color by patching selectors (`app=backend,version=blue|green` and `app=frontend,version=blue|green`).
+- **Shared Infrastructure**: Blue and Green reuse `task-manager-config`, `task-manager-secret`, `task-manager-pvc`, and the Supabase PostgreSQL database without duplicating secrets or storage.
+- **Controller Script (`k8s/blue-green.ps1`)**:
+  - `status`: Displays Blue/Green pod readiness, images, and active Service selectors.
+  - `deploy-blue` / `deploy-green`: Builds/deploys the environment and independently verifies Green (`/health` and `/`) via `kubectl port-forward` before any traffic switch.
+  - `switch-green` / `rollback-blue`: Enforces readiness safety gates (aborts if target deployments are missing or not Ready), switches selectors, verifies endpoints, and validates `http://localhost/health` and `http://localhost/`.
+
+### Shared Database & Environment Limitations
+- **Database Compatibility**: Blue and Green share the same Supabase PostgreSQL instance. Never run concurrent migrations across Blue and Green; schema changes must remain backward-compatible during the cutover/rollback window.
+- **Single-Node Docker Desktop**: `task-manager-pvc` (`ReadWriteOnce` `hostPath`) works across Blue and Green on single-node `desktop-control-plane`, whereas multi-node clusters cannot mount a single `RWO` block volume across different nodes.
+- **Jenkins Integration**: `Jenkinsfile` remains CI-focused (`pollSCM`, SonarQube, Trivy, packaging) so every Git push does not automatically switch production traffic; Blue-Green cutover is intentionally operator-triggered via `k8s/blue-green.ps1`. See `k8s/BLUE-GREEN.md` for full details.
