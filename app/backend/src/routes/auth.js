@@ -80,6 +80,12 @@ router.post("/login", async (req, res, next) => {
       return res.status(401).json({ error: "Invalid credentials" });
     }
 
+    if (!user.isActive) {
+      return res
+        .status(403)
+        .json({ error: "Account is disabled. Contact an administrator." });
+    }
+
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role },
       config.jwtSecret,
