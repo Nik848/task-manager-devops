@@ -608,8 +608,8 @@ Phase 9 integrates automated static analysis, container vulnerability scanning, 
   - Backend runtime removes unnecessary `npm`/`corepack` build tools and excludes `package-lock.json`; `drizzle-orm` upgraded to `^0.45.2` to remediate `CVE-2026-39356`.
   - Jenkins Stages 7 and 8 run `trivy image --exit-code 1 --scanners vuln --severity HIGH,CRITICAL` on both freshly built images.
 - **Kubernetes Secret & RBAC Hardening**:
-  - `k8s/deploy.ps1` fails safely if `task-manager-secret` is missing and `.env` is absent or incomplete (never silently applies placeholders).
-  - `k8s/rbac.yaml` removes `secrets` read permissions from `task-manager-role`.
+  - `k8s/deploy.ps1` requires `DATABASE_URL`, `JWT_SECRET`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD` in `app/backend/.env` (with no hardcoded administrator defaults) and fails safely if `task-manager-secret` is missing and any required key is absent or empty.
+  - `k8s/rbac.yaml` defines `task-manager-operator` strictly as an explicitly provisioned RBAC demonstration account (not used by any application pod or deployment script), narrowed to read-only (`pods`, `pods/log`, `services`) plus namespace-scoped `deployments` management, with zero `secrets` access.
   - `k8s/backend-deployment.yaml` and `k8s/frontend-deployment.yaml` set `automountServiceAccountToken: false` so application pods receive zero Kubernetes API access.
   - Monitoring and Fluentd ServiceAccounts retain read-only, least-privilege permissions with no Secret access.
 

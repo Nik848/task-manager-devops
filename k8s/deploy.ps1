@@ -58,11 +58,11 @@ if (-not [string]::IsNullOrEmpty($secretExists)) {
 } elseif (Test-Path $backendEnvPath) {
     Write-Host "Found local app/backend/.env - extracting credentials for task-manager-secret..." -ForegroundColor Gray
     
-    # Extract values from .env
+    # Extract values from .env (no hardcoded defaults for any secret or admin credential)
     $dbUrl = ""
     $jwtSecret = ""
-    $adminEmail = "admin@example.com"
-    $adminPass = "changeme123"
+    $adminEmail = ""
+    $adminPass = ""
 
     Get-Content $backendEnvPath | ForEach-Object {
         $line = $_.Trim()
@@ -81,17 +81,23 @@ if (-not [string]::IsNullOrEmpty($secretExists)) {
         }
     }
 
-    if ($dbUrl -and $jwtSecret) {
+    $missingKeys = @()
+    if ([string]::IsNullOrWhiteSpace($dbUrl)) { $missingKeys += "DATABASE_URL" }
+    if ([string]::IsNullOrWhiteSpace($jwtSecret)) { $missingKeys += "JWT_SECRET" }
+    if ([string]::IsNullOrWhiteSpace($adminEmail)) { $missingKeys += "ADMIN_EMAIL" }
+    if ([string]::IsNullOrWhiteSpace($adminPass)) { $missingKeys += "ADMIN_PASSWORD" }
+
+    if ($missingKeys.Count -eq 0) {
         kubectl create secret generic task-manager-secret `
             --namespace=$Namespace `
             --from-literal="DATABASE_URL=$dbUrl" `
             --from-literal="JWT_SECRET=$jwtSecret" `
             --from-literal="ADMIN_EMAIL=$adminEmail" `
             --from-literal="ADMIN_PASSWORD=$adminPass" `
-            --dry-run=client -o yaml | kubectl apply -f -
+            --dry-run=client -o yaml | kubectl apply -f - | Out-Null
         Write-Success "Created 'task-manager-secret' from app/backend/.env"
     } else {
-        throw "Incomplete credentials in app/backend/.env (DATABASE_URL and JWT_SECRET are required). Deployment halted to avoid applying placeholder secrets."
+        throw "Missing or empty required credentials in app/backend/.env: $($missingKeys -join ', '). Deployment halted to avoid provisioning incomplete or default credentials."
     }
 } else {
     throw "Secret 'task-manager-secret' does not exist in namespace '$Namespace' and app/backend/.env was not found. Provision the Secret securely before deploying."

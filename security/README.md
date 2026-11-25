@@ -107,7 +107,7 @@ trivy image --exit-code 1 --scanners vuln --severity HIGH,CRITICAL --no-progress
 | ServiceAccount | Namespace | Role / ClusterRole | Permitted Resources & Verbs | Secret Access |
 | :--- | :--- | :--- | :--- | :---: |
 | **`default`** (app pods) | `task-manager` | None (`automountServiceAccountToken: false`) | No Kubernetes API access | **No** |
-| **`task-manager-operator`** | `task-manager` | `Role/task-manager-role` | `pods`, `pods/log`, `services`, `deployments`, `replicasets`, `configmaps`, `persistentvolumeclaims`, `ingresses` | **No** |
+| **`task-manager-operator`** *(RBAC demo only; unused by workloads)* | `task-manager` | `Role/task-manager-role` | Read-only (`get`, `list`, `watch`) on `pods`, `pods/log`, `services`; `get`, `list`, `watch`, `create`, `update`, `patch` on `deployments` | **No** |
 | **`prometheus`** | `monitoring` | `ClusterRole/prometheus-role` | Read-only (`get`, `list`, `watch`) on `nodes`, `services`, `endpoints`, `pods`, `/metrics` | **No** |
 | **`kube-state-metrics`** | `monitoring` | `ClusterRole/kube-state-metrics` | Read-only (`get`, `list`, `watch`) on `pods`, `namespaces` | **No** |
 | **`fluentd`** | `logging` | `ClusterRole/fluentd-role` | Read-only (`get`, `list`, `watch`) on `pods`, `namespaces` | **No** |
