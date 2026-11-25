@@ -1,0 +1,34 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: task-manager-gitops
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: task-manager-gitops
+    app.kubernetes.io/part-of: task-manager-system
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Nik848/task-manager-devops
+    targetRevision: develop
+    path: gitops
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: task-manager
+  # Allow k8s/blue-green.ps1 to control active Service selectors (blue vs green)
+  # without ArgoCD self-heal reverting traffic back to blue.
+  ignoreDifferences:
+    - group: ""
+      kind: Service
+      jsonPointers:
+        - /spec/selector
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - RespectIgnoreDifferences=true
+      - ServerSideApply=true
