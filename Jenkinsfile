@@ -90,7 +90,8 @@ pipeline {
                     sh '''
                         npx --yes @sonar/scan \
                             -Dsonar.host.url=http://host.docker.internal:9000 \
-                            -Dsonar.token="${SONAR_TOKEN}"
+                            -Dsonar.token="${SONAR_TOKEN}" \
+                            -Dsonar.javascript.node.maxspace=512
                     '''
                 }
             }
