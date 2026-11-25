@@ -23,6 +23,7 @@ spec:
         app: frontend
         app.kubernetes.io/name: frontend
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: frontend
           image: taskmanager-frontend:v1.0.1

@@ -91,12 +91,10 @@ if (-not [string]::IsNullOrEmpty($secretExists)) {
             --dry-run=client -o yaml | kubectl apply -f -
         Write-Success "Created 'task-manager-secret' from app/backend/.env"
     } else {
-        Write-Warn "Incomplete credentials in .env. Applying k8s/secret.yaml placeholder template."
-        kubectl apply -f "$PSScriptRoot/secret.yaml"
+        throw "Incomplete credentials in app/backend/.env (DATABASE_URL and JWT_SECRET are required). Deployment halted to avoid applying placeholder secrets."
     }
 } else {
-    Write-Warn "No .env found. Applying k8s/secret.yaml. Remember to update placeholders with actual Supabase credentials!"
-    kubectl apply -f "$PSScriptRoot/secret.yaml"
+    throw "Secret 'task-manager-secret' does not exist in namespace '$Namespace' and app/backend/.env was not found. Provision the Secret securely before deploying."
 }
 
 # 5. Apply Persistent Volume & Persistent Volume Claim

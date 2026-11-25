@@ -1,0 +1,20 @@
+services:
+  sonarqube:
+    image: sonarqube:25.12.0.117093-community
+    container_name: sonarqube-devops
+    restart: unless-stopped
+    ports:
+      # Bind only to loopback so SonarQube is not exposed publicly on the network
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+
+volumes:
+  sonarqube_data:
+    name: sonarqube_data
+  sonarqube_extensions:
+    name: sonarqube_extensions
+  sonarqube_logs:
+    name: sonarqube_logs

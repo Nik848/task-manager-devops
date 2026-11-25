@@ -1,5 +1,5 @@
 # ── Stage 1: Build stage ────────────────────────────────────────────────────
-FROM node:20-alpine AS build
+FROM node:20.20.2-alpine3.23 AS build
 WORKDIR /app
 
 COPY package*.json ./
@@ -14,13 +14,14 @@ ENV VITE_API_URL=$VITE_API_URL
 RUN npm run build
 
 # ── Stage 2: Production web server (Nginx) ──────────────────────────────────
-FROM nginx:1.27-alpine AS production
+FROM nginx:1.27.5-alpine AS production
 
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Security: configure unprivileged runtime for nginx
-RUN chown -R nginx:nginx /usr/share/nginx/html && \
+# Security: apply latest Alpine security patches and configure unprivileged runtime
+RUN apk upgrade --no-cache && \
+    chown -R nginx:nginx /usr/share/nginx/html && \
     chown -R nginx:nginx /var/cache/nginx && \
     chown -R nginx:nginx /var/log/nginx && \
     touch /var/run/nginx.pid && \

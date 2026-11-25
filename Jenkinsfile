@@ -82,10 +82,55 @@ pipeline {
             }
         }
 
-        // ── Stage 5: Packaging ───────────────────────────────────────────────
+        // ── Stage 5: SonarQube Static Analysis ───────────────────────────────
+        stage('SonarQube Analysis') {
+            steps {
+                echo "=== [STAGE 5] Running SonarQube Code Quality & Security Analysis ==="
+                withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
+                    sh '''
+                        npx --yes @sonar/scan \
+                            -Dsonar.host.url=http://host.docker.internal:9000 \
+                            -Dsonar.token="${SONAR_TOKEN}"
+                    '''
+                }
+            }
+        }
+
+        // ── Stage 6: Build Docker Images ─────────────────────────────────────
+        stage('Docker Build') {
+            steps {
+                echo "=== [STAGE 6] Building Hardened Docker Images ==="
+                sh '''
+                    docker build -t taskmanager-backend:${BUILD_NUMBER} ./app/backend
+                    docker build -t taskmanager-frontend:${BUILD_NUMBER} ./app/frontend
+                '''
+            }
+        }
+
+        // ── Stage 7: Trivy Backend Image Scan ────────────────────────────────
+        stage('Trivy Backend Scan') {
+            steps {
+                echo "=== [STAGE 7] Scanning Backend Image for HIGH/CRITICAL Vulnerabilities ==="
+                sh '''
+                    trivy image --exit-code 1 --scanners vuln --severity HIGH,CRITICAL --no-progress taskmanager-backend:${BUILD_NUMBER}
+                '''
+            }
+        }
+
+        // ── Stage 8: Trivy Frontend Image Scan ───────────────────────────────
+        stage('Trivy Frontend Scan') {
+            steps {
+                echo "=== [STAGE 8] Scanning Frontend Image for HIGH/CRITICAL Vulnerabilities ==="
+                sh '''
+                    trivy image --exit-code 1 --scanners vuln --severity HIGH,CRITICAL --no-progress taskmanager-frontend:${BUILD_NUMBER}
+                '''
+            }
+        }
+
+        // ── Stage 9: Packaging ───────────────────────────────────────────────
         stage('Packaging') {
             steps {
-                echo "=== [STAGE 5] Packaging Application Artifacts ==="
+                echo "=== [STAGE 9] Packaging Application Artifacts ==="
                 sh '''
                     echo "--- Packaging Frontend Artifacts ---"
                     mkdir -p release
@@ -104,7 +149,10 @@ pipeline {
 
     post {
         always {
-            echo "Pipeline run completed."
+            echo "Pipeline run completed. Cleaning up temporary build images and workspace."
+            sh '''
+                docker rmi -f taskmanager-backend:${BUILD_NUMBER} taskmanager-frontend:${BUILD_NUMBER} >/dev/null 2>&1 || true
+            '''
             cleanWs notFailBuild: true
         }
         success {

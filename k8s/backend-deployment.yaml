@@ -23,6 +23,7 @@ spec:
         app: backend
         app.kubernetes.io/name: backend
     spec:
+      automountServiceAccountToken: false
       initContainers:
         - name: init-storage-permissions
           image: taskmanager-backend:v1.0.0

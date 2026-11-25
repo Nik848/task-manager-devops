@@ -594,3 +594,33 @@ kubectl exec -n logging ds/fluentd -- fluentd --dry-run -c /fluentd/etc/fluent.c
 kubectl exec -n logging ds/fluentd -- sh -c "grep 'request completed' /var/log/fluentd-central/application/app.20261125.log | tail -n 2"
 kubectl exec -n logging ds/fluentd -- sh -c "grep 'kube-system' /var/log/fluentd-central/infrastructure/infra.20261125.log | tail -n 2"
 ```
+
+---
+
+## 13. Security Implementation — DevSecOps (Phase 9)
+
+### Security Architecture
+Phase 9 integrates automated static analysis, container vulnerability scanning, secret segregation, hardened Docker builds, and least-privilege Kubernetes RBAC into the existing DevOps pipeline without redesigning earlier phases:
+- **SonarQube Community Build (`security/docker-compose.sonarqube.yml`)**: Pinned `sonarqube:25.12.0.117093-community` bound to `127.0.0.1:9000` with persistent named volumes and embedded H2 database. Project metadata and exclusions are defined in `sonar-project.properties`.
+- **Jenkins Credentials**: `sonarqube-token` is stored encrypted in Jenkins Credentials and injected via `withCredentials` (`SONAR_TOKEN`), masked in build logs. Jenkins communicates with SonarQube via `http://host.docker.internal:9000`.
+- **Docker Image Hardening & Trivy Scanning**:
+  - Pinned base images (`node:20.20.2-alpine3.23`, `nginx:1.27.5-alpine`) with `apk upgrade --no-cache`.
+  - Backend runtime removes unnecessary `npm`/`corepack` build tools and excludes `package-lock.json`; `drizzle-orm` upgraded to `^0.45.2` to remediate `CVE-2026-39356`.
+  - Jenkins Stages 7 and 8 run `trivy image --exit-code 1 --scanners vuln --severity HIGH,CRITICAL` on both freshly built images.
+- **Kubernetes Secret & RBAC Hardening**:
+  - `k8s/deploy.ps1` fails safely if `task-manager-secret` is missing and `.env` is absent or incomplete (never silently applies placeholders).
+  - `k8s/rbac.yaml` removes `secrets` read permissions from `task-manager-role`.
+  - `k8s/backend-deployment.yaml` and `k8s/frontend-deployment.yaml` set `automountServiceAccountToken: false` so application pods receive zero Kubernetes API access.
+  - Monitoring and Fluentd ServiceAccounts retain read-only, least-privilege permissions with no Secret access.
+
+### Verification & Limitations
+```powershell
+# Start SonarQube locally
+docker compose -f security/docker-compose.sonarqube.yml up -d
+curl.exe -s http://localhost:9000/api/system/status
+
+# Verify RBAC boundaries
+kubectl auth can-i get secrets --as=system:serviceaccount:task-manager:task-manager-operator -n task-manager
+kubectl auth can-i get pods --as=system:serviceaccount:task-manager:default -n task-manager
+```
+- **Limitations**: Local Docker Desktop single-node environment is not production-grade (SonarQube uses embedded H2, Jenkins mounts `/var/run/docker.sock`, and Kubernetes lacks an external KMS or enforced NetworkPolicies). See `security/README.md` for full details.
