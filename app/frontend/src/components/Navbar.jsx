@@ -39,6 +39,7 @@ export default function Navbar() {
             <div className="hidden sm:flex space-x-8">
               {link("/dashboard", "Dashboard")}
               {link("/tasks", "Tasks")}
+              {user?.role === "admin" && link("/users", "Users")}
             </div>
           </div>
 
@@ -106,6 +107,15 @@ export default function Navbar() {
           >
             Tasks
           </Link>
+          {user?.role === "admin" && (
+            <Link
+              to="/users"
+              className="block py-2 text-sm text-gray-700"
+              onClick={() => setOpen(false)}
+            >
+              Users
+            </Link>
+          )}
           <div className="border-t border-gray-200 pt-2 mt-2">
             <span className="block py-1 text-sm text-gray-500">
               {user?.name} ({user?.role})
