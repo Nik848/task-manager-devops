@@ -3,11 +3,14 @@ import Navbar from "./Navbar";
 
 export default function Layout() {
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-warm-50 text-navy-900 flex flex-col selection:bg-coral-100 selection:text-coral-800">
       <Navbar />
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <Outlet />
       </main>
+      <footer className="border-t border-warm-200 py-6 text-center text-xs text-navy-400">
+        TaskManager Platform • Engineered with Warm Minimalism • Supabase PostgreSQL
+      </footer>
     </div>
   );
 }

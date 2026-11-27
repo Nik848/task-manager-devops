@@ -26,63 +26,108 @@ export default function Login() {
     }
   };
 
+  const fillAdmin = () => {
+    setEmail("admin@example.com");
+    setPassword("changeme");
+  };
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full space-y-8">
-        <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-            Sign in to Task Manager
-          </h2>
-        </div>
+    <div className="min-h-screen flex flex-col justify-center bg-warm-50 py-12 px-4 sm:px-6 lg:px-8 selection:bg-coral-100 selection:text-coral-800">
+      <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
+        <Link to="/" className="inline-flex items-center space-x-2.5 mb-6 group">
+          <div className="w-10 h-10 rounded-xl bg-navy-900 flex items-center justify-center text-white font-bold text-lg shadow-sm border border-navy-800 transition-transform group-hover:scale-105">
+            <span className="text-coral-500 font-extrabold text-xl">T</span>M
+          </div>
+          <span className="text-2xl font-bold tracking-tight text-navy-950">
+            TaskManager
+          </span>
+        </Link>
+        <h2 className="text-2xl sm:text-3xl font-extrabold text-navy-950 tracking-tight">
+          Welcome back
+        </h2>
+        <p className="mt-2 text-sm text-navy-600">
+          Sign in to access your projects, tasks, and system metrics.
+        </p>
+      </div>
 
-        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-          {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded text-sm">
-              {error}
-            </div>
-          )}
+      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
+        <div className="bg-white py-8 px-6 sm:px-10 rounded-2xl shadow-warm-md border border-warm-200">
+          <form className="space-y-5" onSubmit={handleSubmit}>
+            {error && (
+              <div className="p-3.5 rounded-xl bg-coral-50 border border-coral-200 text-coral-800 text-xs font-medium leading-relaxed">
+                {error}
+              </div>
+            )}
 
-          <div className="rounded-md shadow-sm -space-y-px">
             <div>
+              <label className="block text-xs font-bold uppercase tracking-wider text-navy-700 mb-1.5">
+                Email address
+              </label>
               <input
                 type="email"
                 required
-                placeholder="Email address"
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                placeholder="name@company.com"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-warm-300 bg-warm-50/50 text-navy-950 placeholder-warm-400 text-sm focus:outline-none focus:ring-2 focus:ring-coral-400 focus:border-coral-400 transition-all"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
             </div>
+
             <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-bold uppercase tracking-wider text-navy-700">
+                  Password
+                </label>
+              </div>
               <input
                 type="password"
                 required
-                placeholder="Password"
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                placeholder="••••••••"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-warm-300 bg-warm-50/50 text-navy-950 placeholder-warm-400 text-sm focus:outline-none focus:ring-2 focus:ring-coral-400 focus:border-coral-400 transition-all"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
             </div>
-          </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
-          >
-            {loading ? "Signing in…" : "Sign in"}
-          </button>
-
-          <p className="text-center text-sm text-gray-600">
-            Don&apos;t have an account?{" "}
-            <Link
-              to="/signup"
-              className="font-medium text-indigo-600 hover:text-indigo-500"
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-3 px-4 rounded-xl text-sm font-semibold text-white bg-coral-500 hover:bg-coral-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-coral-400 shadow-coral hover:shadow-warm-md transition-all transform hover:-translate-y-0.5 disabled:opacity-50"
             >
-              Sign up
-            </Link>
-          </p>
-        </form>
+              {loading ? "Signing in…" : "Sign in to account"}
+            </button>
+          </form>
+
+          {/* Quick Demo Credentials Helper */}
+          <div className="mt-6 pt-5 border-t border-warm-200 text-center">
+            <span className="text-xs text-navy-500 block mb-2 font-medium">
+              Demo admin credentials:
+            </span>
+            <button
+              type="button"
+              onClick={fillAdmin}
+              className="inline-flex items-center space-x-1.5 text-xs text-coral-600 hover:text-coral-700 font-semibold bg-coral-50 px-3 py-1.5 rounded-lg border border-coral-200/80 transition-colors"
+            >
+              <span>Auto-fill Admin (admin@example.com)</span>
+            </button>
+          </div>
+        </div>
+
+        <p className="mt-6 text-center text-sm text-navy-600">
+          Don&apos;t have an account?{" "}
+          <Link
+            to="/signup"
+            className="font-semibold text-coral-600 hover:text-coral-700 transition-colors"
+          >
+            Create one free
+          </Link>
+        </p>
+
+        <p className="mt-2 text-center text-xs text-warm-500">
+          <Link to="/" className="hover:text-navy-800 transition-colors">
+            ← Back to Landing Page
+          </Link>
+        </p>
       </div>
     </div>
   );
