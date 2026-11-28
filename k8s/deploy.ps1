@@ -10,7 +10,7 @@
 [CmdletBinding()]
 param (
     [string]$Namespace = "task-manager",
-    [switch]$SkipIngress = $false
+    [switch]$IncludeIngress = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -130,8 +130,8 @@ if ([string]::IsNullOrWhiteSpace($feVer)) {
 }
 Write-Success "Services configured."
 
-# 8. Apply Ingress (if available)
-if (-not $SkipIngress) {
+# 8. Apply Ingress (Optional Bonus Feature)
+if ($IncludeIngress) {
     Write-Step "Applying Ingress"
     kubectl apply -f "$PSScriptRoot/ingress.yaml"
     Write-Success "Ingress applied (Host: task-manager.local)."

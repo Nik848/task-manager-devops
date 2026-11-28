@@ -77,125 +77,43 @@ data:
     </filter>
 
     # ---------------------------------------------------------------------------
-    # 5. Map Pino numeric levels to readable text (application logs only)
-    #    Pino: 10=trace, 20=debug, 30=info, 40=warn, 50=error, 60=fatal
-    # ---------------------------------------------------------------------------
-    <filter kubernetes.var.log.containers.*_task-manager_*.log>
-      @type record_transformer
-      @id filter_level_text
-      enable_ruby true
-      <record>
-        level ${{"10"=>"trace","20"=>"debug","30"=>"info","40"=>"warn","50"=>"error","60"=>"fatal"}[record["level"].to_s] || "unknown"}
-      </record>
-    </filter>
-
-    # ---------------------------------------------------------------------------
-    # 6. Flatten Kubernetes metadata for Loki labels (all logs)
-    # ---------------------------------------------------------------------------
-    <filter kubernetes.**>
-      @type record_transformer
-      @id filter_flatten_k8s
-      enable_ruby true
-      <record>
-        namespace ${record.dig("kubernetes", "namespace_name") || "unknown"}
-        pod ${record.dig("kubernetes", "pod_name") || "unknown"}
-        container ${record.dig("kubernetes", "container_name") || "unknown"}
-      </record>
-    </filter>
-
-    # ---------------------------------------------------------------------------
-    # 7. Output: Application logs -> file + Loki (with level label)
+    # 5. Output: Application logs -> Centralized Local Storage
     # ---------------------------------------------------------------------------
     <match kubernetes.var.log.containers.*_task-manager_*.log>
-      @type copy
-
-      <store>
+      @type file
+      @id out_file_application
+      path /var/log/fluentd-central/application/app
+      append true
+      <format>
+        @type json
+      </format>
+      <buffer time>
         @type file
-        @id out_file_application
-        path /var/log/fluentd-central/application/app
-        append true
-        <format>
-          @type json
-        </format>
-        <buffer time>
-          @type file
-          path /fluentd/state/buffer-application
-          timekey 1d
-          timekey_wait 5s
-          flush_mode interval
-          flush_interval 5s
-        </buffer>
-      </store>
-
-      <store>
-        @type loki
-        @id out_loki_application
-        url http://loki.logging.svc.cluster.local:3100
-        extra_labels {}
-        <label>
-          namespace
-          pod
-          container
-          log_category
-          level
-        </label>
-        <buffer>
-          @type file
-          path /fluentd/state/buffer-loki-application
-          flush_mode interval
-          flush_interval 5s
-          retry_max_times 5
-          retry_wait 10s
-          chunk_limit_size 1m
-          total_limit_size 32m
-        </buffer>
-      </store>
+        path /fluentd/state/buffer-application
+        timekey 1d
+        timekey_wait 5s
+        flush_mode interval
+        flush_interval 5s
+      </buffer>
     </match>
 
     # ---------------------------------------------------------------------------
-    # 8. Output: Infrastructure logs -> file + Loki (no level label)
+    # 6. Output: Infrastructure & Cluster logs -> Centralized Local Storage
     # ---------------------------------------------------------------------------
     <match kubernetes.**>
-      @type copy
-
-      <store>
+      @type file
+      @id out_file_infrastructure
+      path /var/log/fluentd-central/infrastructure/infra
+      append true
+      <format>
+        @type json
+      </format>
+      <buffer time>
         @type file
-        @id out_file_infrastructure
-        path /var/log/fluentd-central/infrastructure/infra
-        append true
-        <format>
-          @type json
-        </format>
-        <buffer time>
-          @type file
-          path /fluentd/state/buffer-infrastructure
-          timekey 1d
-          timekey_wait 5s
-          flush_mode interval
-          flush_interval 5s
-        </buffer>
-      </store>
-
-      <store>
-        @type loki
-        @id out_loki_infrastructure
-        url http://loki.logging.svc.cluster.local:3100
-        extra_labels {}
-        <label>
-          namespace
-          pod
-          container
-          log_category
-        </label>
-        <buffer>
-          @type file
-          path /fluentd/state/buffer-loki-infrastructure
-          flush_mode interval
-          flush_interval 5s
-          retry_max_times 5
-          retry_wait 10s
-          chunk_limit_size 1m
-          total_limit_size 32m
-        </buffer>
-      </store>
+        path /fluentd/state/buffer-infrastructure
+        timekey 1d
+        timekey_wait 5s
+        flush_mode interval
+        flush_interval 5s
+      </buffer>
     </match>
