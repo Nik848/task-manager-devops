@@ -288,7 +288,7 @@ The table below maps the implemented components directly to the **100-Mark Evalu
 | **Monitoring & Logging** | **5** | Prometheus, 8-panel Grafana dashboard, Metrics Server, and Fluentd DaemonSet centralized logging. | Targets `UP`, live dashboards at `http://localhost:3001`, logs collected in `/var/log/fluentd-central/`. |
 | **Security Implementation** | **5** | SonarQube SAST, Trivy container CVE scans, minimal RBAC (`task-manager-operator`), no default passwords. | Quality Gate PASSED, 0 High/Critical CVEs, RBAC secret-access denied. |
 | **GitOps / Deployment Strategy** | **5** | Blue-Green zero-downtime deployment controller (`blue-green.ps1`) and ArgoCD v3.6.1 GitOps continuous sync. | EndpointSlice cutover verified; ArgoCD Application `Synced` & `Healthy`. |
-| **Documentation & Demo** | **5** | Complete capstone report, phase READMEs, architecture diagrams, and operational scripts. | [CAPSTONE_REPORT.md](file:///c:/Users/nik84/OneDrive/Desktop/task-manager-devops/CAPSTONE_REPORT.md), [notes.md](file:///c:/Users/nik84/OneDrive/Desktop/task-manager-devops/notes.md), and quickstart guides. |
+| **Documentation & Demo** | **5** | Complete capstone report, phase READMEs, architecture diagrams, and operational scripts. | [CAPSTONE_REPORT.md](file:///c:/Users/nik84/OneDrive/Desktop/task-manager-devops/CAPSTONE_REPORT.md), [DEVOPS_APPLICATIONS.md](file:///c:/Users/nik84/OneDrive/Desktop/task-manager-devops/DEVOPS_APPLICATIONS.md), and quickstart guides. |
 | **TOTAL MARKS** | **100** | **Comprehensive Full-Spectrum DevOps Solution** | **All 11 Syllabus Phases Fully Verified** |
 
 ---
